@@ -1,0 +1,1975 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>WeekendWarrior&copy;: A Reservist's Road to 20</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  :root { --navy:#01225E; --red:#B61D30; --steel:#849CC1; --paper:#F0F0F3; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: #000d26; overflow: hidden;
+    touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  }
+  #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; outline: none; }
+  #pad {
+    position: fixed; left: 0; right: 0; bottom: 0; display: none;
+    justify-content: space-between; align-items: flex-end; pointer-events: none;
+    padding: 12px calc(16px + env(safe-area-inset-right, 0px)) calc(12px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));
+  }
+  .grp { display: flex; gap: 12px; }
+  .b {
+    pointer-events: auto; width: 68px; height: 68px; border-radius: 50%;
+    background: rgba(1,34,94,.55); border: 3px solid rgba(240,240,243,.7); color: #F0F0F3;
+    font: 11px "Press Start 2P", monospace; display: flex; align-items: center; justify-content: center;
+    touch-action: none;
+  }
+  .b.on { background: rgba(182,29,48,.8); }
+  #pausebtn {
+    position: fixed; display: none; width: 42px; height: 42px; border-radius: 8px;
+    top: calc(8px + env(safe-area-inset-top, 0px)); right: calc(8px + env(safe-area-inset-right, 0px));
+  }
+  body.touch[data-state="play"] #pad, body.touch[data-state="play"] #pausebtn { display: flex; }
+  #upbtn { display: none; background: rgba(242,194,48,.75); color: #01225E; }
+  body.atdoor #upbtn { display: flex; }
+</style>
+</head>
+<body data-state="start">
+<div id="wrap"><canvas id="c" tabindex="0" aria-label="WeekendWarrior: an 8-bit Reserve career game"></canvas></div>
+<div id="pad">
+  <div class="grp"><div class="b" data-k="left">&lt;</div><div class="b" data-k="right">&gt;</div></div>
+  <div class="grp"><div class="b" id="upbtn" data-k="up">UP</div><div class="b" data-k="fire">FIRE</div><div class="b" data-k="jump">JUMP</div></div>
+</div>
+<div class="b" id="pausebtn" data-k="pause">II</div>
+
+<script>
+(function () {
+"use strict";
+
+/* ===================== SETUP ===================== */
+const W = 320, H = 180, T = 16, ROWS = 11, FONT = '"Press Start 2P", monospace';
+const C = { navy:'#01225E', red:'#B61D30', steel:'#849CC1', paper:'#F0F0F3', gold:'#F2C230', green:'#4CC35A', ink:'#000d26' };
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+cv.width = W; cv.height = H;
+
+function resize() {
+  const s = Math.min(innerWidth / W, innerHeight / H);
+  cv.style.width = Math.round(W * s) + 'px';
+  cv.style.height = Math.round(H * s) + 'px';
+}
+addEventListener('resize', resize); resize();
+
+/* URL options for course embedding:
+   ?mode=module   -> shows "Back to course" buttons and posts messages to the parent page
+   ?maxYear=N     -> only years 1..N are playable (e.g. N = modules completed)
+   ?years=N       -> tells the game the learner already has N good years (sync from your LMS) */
+const QS = new URLSearchParams(location.search);
+const MODULE = QS.get('mode') === 'module';
+const MAXY = Math.max(1, Math.min(20, parseInt(QS.get('maxYear'), 10) || 20));
+
+/* ===================== SAVE DATA ===================== */
+const KEY = 'roa-good-year-v1';
+function load() {
+  try { const v = JSON.parse(localStorage.getItem(KEY)); if (v && typeof v.years === 'number') return v; } catch (e) {}
+  return { years: 0, pay: 0 };
+}
+function save() { try { localStorage.setItem(KEY, JSON.stringify(prog)); } catch (e) {} }
+let prog = load();
+const qYears = parseInt(QS.get('years'), 10);
+if (qYears >= 0 && qYears <= 20 && qYears > prog.years) { prog.years = qYears; save(); }
+const rollLoss = from => from + 4 + (Math.random() < 0.5 ? 1 : 0);   // every 4th or 5th cleared year
+if (typeof prog.cleared !== 'number') prog.cleared = 0;
+if (typeof prog.lossAt !== 'number') prog.lossAt = rollLoss(prog.cleared);
+
+/* ===================== CONTENT ===================== */
+const YEARS = [
+  "YOUR FIRST DRILL. NOBODY KNOWS WHERE YOUR ORDERS ARE.",
+  "YOUR CAC EXPIRED OVER A HOLIDAY WEEKEND.",
+  "THE REPLY-ALL STORM HAS BEGUN. 400 PEOPLE SAY 'PLEASE REMOVE ME.'",
+  "YOUR CIVILIAN BOSS ASKS IF DRILL IS 'OPTIONAL.' IT ISN'T.",
+  "PHA OVERDUE. NEXT CLINIC OPENING: 2031.",
+  "DTS SAYS YOUR VOUCHER IS 'PENDING.' SINCE MARCH.",
+  "FOURTEEN MANDATORY TRAININGS. ALL DUE TODAY.",
+  "ORDERS ARRIVE 48 HOURS BEFORE YOUR REPORT DATE.",
+  "YOUR UNIT REORGANIZED. YOUR SLOT MOVED 300 MILES.",
+  "HALFWAY THERE. YOUR POINTS STATEMENT DISAGREES.",
+  "GOV TRAVEL CARD DECLINED AT THE HOTEL DESK.",
+  "DRILL WEEKEND IS YOUR KID'S BIRTHDAY. AGAIN.",
+  "NEW UNIFORM AUTHORIZED. OLD UNIFORM STILL REQUIRED.",
+  "YOUR LES APPEARS TO BE WRITTEN IN ANCIENT GREEK.",
+  "EMPLOYER 'RESTRUCTURES' WHILE YOU'RE ON ORDERS. USERRA SAYS NO.",
+  "YOUR RECORDS ARE MISSING THREE YEARS. AGAIN.",
+  "TRICARE ATE YOUR PASSWORD. THE RESET NEEDS YOUR PASSWORD.",
+  "BATTLE ASSEMBLY MOVED TO THE WEEKEND YOU BOOKED A TRIP.",
+  "YOUR RETIREMENT POINTS ACCOUNT IS 'UNDER REVIEW.'",
+  "FINAL YEAR. THE 20-YEAR LETTER IS IN SIGHT. DON'T TRIP NOW."
+];
+const FOES = {
+  tape:  { name:'RED TAPE',        year:1,  desc:'STOMP IT OR FIRE.' },
+  email: { name:'REPLY-ALL',       year:3,  desc:'IT FLIES AT YOU.' },
+  dts:   { name:'DTS ERROR',       year:6,  desc:'HOPS. TAKES 2 HITS.' },
+  ppt:   { name:'DEATH BY SLIDES', year:10, desc:'SHOOTS SLIDES. 3 HITS.' },
+  dfas:  { name:'DFAS RECOUPMENT LETTER', year:5, desc:'CHASES YOU, STEALS PAY. 2 HITS.' }
+};
+
+/* ===================== SPRITES ===================== */
+const NPC_PAL = { H:'#8c7448', h:'#6b5a36', S:'#c68642', E:'#1a1a1a', U:'#b59b6b', u:'#8c7448', B:'#3a2e1a', G:'#3a3a3a', g:'#8a8a8a' };
+const JX = 390;   // JRSOI building's left edge in mobilization levels
+const PAL = { H:'#4b5320', h:'#33391a', S:'#e0ac69', E:'#1a1a1a', U:'#7d8452', u:'#5a6037', B:'#222', G:'#3a3a3a', g:'#8a8a8a' };
+const TOP = [
+  "...HHHH...",
+  "..HHHHHH..",
+  "..hhhhhh..",
+  "...SSSE...",
+  "...SSSS...",
+  "..UUUUUU..",
+  ".UUUUUGGGg",
+  ".UUUUUUu..",
+  ".SUUUUUu..",
+  "..uuuuuu.."
+];
+const P_STAND = TOP.concat(["..UU..UU..", "..UU..UU..", "..UU..UU..", "..BBB.BBB."]);
+const P_RUN1  = TOP.concat(["..UUUUU...", ".UU...UU..", "UU.....UU.", "BB.....BBB"]);
+const P_RUN2  = TOP.concat(["...UUU....", "...UUU....", "..UUUU....", "..BBBBB..."]);
+const P_JUMP  = TOP.concat(["..UU.UU...", "..UU..UU..", ".BB....BB.", ".........."]);
+const TAPE = [
+  "....RRRRRR....",
+  "..RRRRRRRRRR..",
+  ".RRRRRRRRRRRR.",
+  ".RWWWRRRRWWWR.",
+  "RRWKWRRRRWKWRR",
+  "RRWWWRRRRWWWRR",
+  "RRRRRRRRRRRRRR",
+  "RRKKKKKKKKKKRR",
+  "RRRWKWKWKWKRRR",
+  "RRRRRRRRRRRRRR",
+  "WWRRRRWWRRRRWW",
+  ".RRRRRRRRRRRR.",
+  "..DD..DD..DD..",
+  "..KK..KK..KK.."
+];
+const TAPE_PAL = { R:C.red, W:C.paper, K:'#000', D:'#7c1220' };
+const STAR = [
+  ".....Y.....",
+  "....YYY....",
+  "....YYY....",
+  "YYYYYYYYYYY",
+  ".YYYYYYYYY.",
+  "..YYYYYYY..",
+  "...YYYYY...",
+  "..YYYYYYY..",
+  "..YYY.YYY..",
+  ".YY.....YY.",
+  "YY.......YY"
+];
+const HEART = [".RR.RR.", "RRRRRRR", "RRRRRRR", ".RRRRR.", "..RRR..", "...R..."];
+
+function spr(rows, pal, x, y, flip, s) {
+  s = s || 1; x = Math.round(x); y = Math.round(y);
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    for (let c = 0; c < row.length; c++) {
+      const ch = row[flip ? row.length - 1 - c : c];
+      if (ch === '.') continue;
+      ctx.fillStyle = pal[ch];
+      ctx.fillRect(x + c * s, y + r * s, s, s);
+    }
+  }
+}
+
+/* ===================== AUDIO ===================== */
+let AC = null, muted = false;
+let unlocked = false;
+function audioInit() {
+  // iPhone (iOS 16.4+): treat game audio as "playback" so it plays even with the silent switch on
+  try { if (navigator.audioSession && navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback'; } catch (e) {}
+  if (!AC) { const A = window.AudioContext || window.webkitAudioContext; if (A) { try { AC = new A(); } catch (e) {} } }
+  if (!AC) return;
+  // iOS can leave audio "suspended" or "interrupted" (e.g. after a phone call) - wake it up
+  if (AC.state !== 'running') { try { const r = AC.resume(); if (r && r.catch) r.catch(() => {}); } catch (e) {} }
+  // Play one silent sample inside the tap; this is what fully unlocks sound on iPhones
+  if (!unlocked) {
+    try {
+      const b = AC.createBuffer(1, 1, 22050), src = AC.createBufferSource();
+      src.buffer = b; src.connect(AC.destination); src.start(0);
+      unlocked = true;
+    } catch (e) {}
+  }
+  musicUnlock();
+  syncMusic();   // every tap double-checks the right song is playing
+}
+// Phones only count some gestures as "real" taps for audio, so listen for all of them
+['touchstart', 'touchend', 'pointerdown', 'mousedown', 'click', 'keydown'].forEach(t =>
+  addEventListener(t, audioInit, { capture: true, passive: true }));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) audioInit(); });
+let master = null, noiseBuf = null;
+function out() {
+  if (!master) {
+    const comp = AC.createDynamicsCompressor();
+    master = AC.createGain(); master.gain.value = 0.9;
+    master.connect(comp); comp.connect(AC.destination);
+  }
+  return master;
+}
+/* Square/triangle/saw "chip" voice with optional pitch sweep */
+function tone(f, d, type, v, slide, delay) {
+  if (!AC || muted) return;
+  const t = AC.currentTime + (delay || 0);
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type || 'square';
+  o.frequency.setValueAtTime(f, t);
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, f + slide), t + d);
+  g.gain.setValueAtTime(v || 0.05, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  o.connect(g); g.connect(out());
+  o.start(t); o.stop(t + d + 0.02);
+}
+/* Crunchy 8-bit noise channel (like the NES noise chip) for blasts and explosions */
+function noise(d, v, fStart, fEnd, delay) {
+  if (!AC || muted) return;
+  if (!noiseBuf) {
+    const len = AC.sampleRate;
+    noiseBuf = AC.createBuffer(1, len, AC.sampleRate);
+    const ch = noiseBuf.getChannelData(0);
+    let val = 0;
+    for (let i = 0; i < len; i++) { if (i % 6 === 0) val = Math.random() > 0.5 ? 1 : -1; ch[i] = val; }
+  }
+  const t = AC.currentTime + (delay || 0);
+  const s = AC.createBufferSource(), fl = AC.createBiquadFilter(), g = AC.createGain();
+  s.buffer = noiseBuf; s.loop = true;
+  fl.type = 'lowpass';
+  fl.frequency.setValueAtTime(fStart, t);
+  fl.frequency.exponentialRampToValueAtTime(Math.max(40, fEnd), t + d);
+  g.gain.setValueAtTime(v, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  s.connect(fl); fl.connect(g); g.connect(out());
+  s.start(t, Math.random() * 0.5); s.stop(t + d + 0.02);
+}
+/* ===================== MUSIC ===================== */
+/* Music streams through the phone's normal audio player (not decoded into memory),
+   which keeps iPhones from running out of memory and closing the page. */
+const MUSIC_SRC = {
+  title: 'fanfare.mp3',     // these three files sit next to index.html
+  game:  'operation.mp3',
+  mob:   'mobilization.mp3'
+};
+const music = { el: {}, unlocked: false };
+function musicEl(name) {
+  if (music.el[name]) return music.el[name];
+  try {
+    const a = new Audio(MUSIC_SRC[name]);
+    a.loop = true; a.preload = 'auto'; a.setAttribute('playsinline', '');
+    a.addEventListener('error', () => { a._broken = true; });   // missing file = game keeps running, just no music
+    music.el[name] = a;
+    return a;
+  } catch (e) { return null; }
+}
+function wantedTrack() {
+  if (['start', 'title', 'howto', 'letter'].includes(state)) return 'title';
+  if (['intro', 'play'].includes(state)) return L && L.mob ? 'mob' : 'game';
+  return null;   // paused, win, bad and data-loss screens are quiet
+}
+function syncMusic() {
+  if (!music.unlocked) return;
+  const want = wantedTrack();
+  ['title', 'game', 'mob'].forEach(name => {
+    const a = musicEl(name);
+    if (!a || a._priming || a._broken) return;
+    if (name === want) {
+      a.muted = muted;
+      if (a.paused) { const p = a.play(); if (p && p.catch) p.catch(() => {}); }
+    } else if (!a.paused) a.pause();
+  });
+}
+function musicUnlock() {
+  if (music.primed) return;
+  music.primed = true; music.unlocked = true;
+  // iPhones only let audio start from a tap, so silently "prime" every other track during that tap
+  ['game', 'mob'].forEach(name => {
+    const g = musicEl(name);
+    if (!g || wantedTrack() === name) return;
+    g._priming = true; g.muted = true;
+    const p = g.play();
+    const done = () => { g._priming = false; if (wantedTrack() !== name) g.pause(); g.muted = muted; syncMusic(); };
+    if (p && p.then) p.then(done, done); else done();
+  });
+  syncMusic();
+}
+// Laptops (and course pages that allow autoplay) can start the fanfare with no tap at all
+function tryAutoplay() {
+  const a = musicEl('title');
+  if (!a || muted) return;
+  try {
+    const p = a.play();
+    if (p && p.then) p.then(() => { music.unlocked = true; if (wantedTrack() !== 'title') a.pause(); }, () => {});
+  } catch (e) {}
+}
+setTimeout(tryAutoplay, 0);
+
+const sfx = {
+  // "Boing" jump: quick rising square sweep with a bright little tail
+  jump:  () => { tone(196, 0.12, 'square', 0.05, 520); tone(392, 0.08, 'square', 0.025, 400, 0.05); },
+  // "Pew" blaster: falling square zap + a tiny noise crack, pitch varies so rapid fire isn't monotonous
+  shoot: () => { const p = 1300 + Math.random() * 250; tone(p, 0.09, 'square', 0.035, -p + 180); noise(0.03, 0.03, 6000, 2000); },
+  slide: () => { tone(300, 0.14, 'sawtooth', 0.035, -180); noise(0.06, 0.02, 2000, 400); },
+  coin:  () => { tone(988, 0.06, 'square', 0.04); tone(1319, 0.12, 'square', 0.04, 0, 0.06); },
+  power: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.09, 'square', 0.04, 0, i * 0.07)),
+  // Hit that doesn't destroy: short metallic tick
+  hit:   () => { noise(0.05, 0.06, 5000, 1500); tone(440, 0.05, 'square', 0.03, -200); },
+  // Explosion: rumbling noise burst + low pitch drop. Bigger for tougher enemies.
+  boom:  (big) => {
+    noise(big ? 0.7 : 0.45, big ? 0.22 : 0.16, 3500, 60);
+    tone(big ? 140 : 180, big ? 0.5 : 0.3, 'triangle', 0.12, big ? -110 : -140);
+    if (big) noise(0.35, 0.12, 1800, 80, 0.12);
+  },
+  stomp: () => { tone(200, 0.1, 'triangle', 0.08, -120); noise(0.08, 0.08, 1500, 200); },
+  hurt:  () => { tone(220, 0.25, 'sawtooth', 0.05, -160); noise(0.2, 0.08, 2500, 150); },
+  glitch: () => {
+    for (let i = 0; i < 12; i++) tone(100 + Math.random() * 1600, 0.05, 'square', 0.04, 0, i * 0.05);
+    noise(0.7, 0.14, 5000, 120, 0.6);
+    tone(600, 0.9, 'sawtooth', 0.05, -560, 0.6);
+  },
+  vroom: () => { tone(70, 0.5, 'sawtooth', 0.06, 120); tone(140, 0.4, 'square', 0.03, 180, 0.1); },
+  honk:  () => { tone(392, 0.08, 'square', 0.05); tone(494, 0.12, 'square', 0.05, 0, 0.07); },
+  fundFail: () => {
+    [880, 660, 880, 660, 880, 660].forEach((f, i) => tone(f, 0.12, 'square', 0.05, 0, i * 0.13));
+    tone(300, 0.9, 'sawtooth', 0.05, -250, 0.8);
+  },
+  mobilize: () => {   // call-up siren
+    for (let i = 0; i < 4; i++) { tone(440, 0.25, 'square', 0.045, 440, i * 0.5); tone(880, 0.25, 'square', 0.045, -440, i * 0.5 + 0.25); }
+  },
+  chopper: () => { for (let i = 0; i < 16; i++) noise(0.04, 0.06, 900, 200, i * 0.07); },
+  shutdown: () => { [523, 415, 330, 262].forEach((f, i) => tone(f, 0.2, 'square', 0.05, 0, i * 0.18)); noise(0.5, 0.08, 1200, 100, 0.7); },
+  shop:  () => [784, 988, 1175, 1568, 1175, 1568].forEach((f, i) => tone(f, 0.08, 'square', 0.04, 0, i * 0.07)),
+  sel:   () => tone(660, 0.05, 'square', 0.03),
+  no:    () => tone(120, 0.12, 'square', 0.04),
+  win:   () => [523, 659, 784, 659, 784, 1047].forEach((f, i) => tone(f, 0.12, 'square', 0.045, 0, i * 0.11)),
+  lose:  () => [392, 330, 262, 196].forEach((f, i) => tone(f, 0.18, 'triangle', 0.06, 0, i * 0.16))
+};
+
+/* ===================== INPUT ===================== */
+const keys = {}, touch = { left:false, right:false, jump:false, fire:false };
+const ev = { jump:false, fire:false, ok:false, up:false, down:false, enter:false };
+const JUMPK = [' ', 'arrowup', 'w', 'z', 'k'], FIREK = ['x', 'j', 'f'];
+const anyKey = a => a.some(k => keys[k]);
+const hold = {
+  left:  () => keys.arrowleft || keys.a || touch.left,
+  right: () => keys.arrowright || keys.d || touch.right,
+  jump:  () => anyKey(JUMPK) || touch.jump,
+  fire:  () => anyKey(FIREK) || touch.fire
+};
+
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  audioInit();
+  if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) e.preventDefault();
+  if (state === 'start') { if (!e.repeat) go('title'); keys[k] = true; return; }
+  if (!e.repeat) {
+    if ((k === 'arrowup' || k === 'w') && atDoor) ev.enter = true;
+    else if (JUMPK.includes(k)) ev.jump = true;
+    if (FIREK.includes(k)) ev.fire = true;
+    if (k === 'enter' || k === ' ') ev.ok = true;
+    if (k === 'arrowup' || k === 'w') ev.up = true;
+    if (k === 'arrowdown' || k === 's') ev.down = true;
+    if (k === 'p' || k === 'escape') togglePause();
+    if (k === 'm') { muted = !muted; syncMusic(); }
+  }
+  keys[k] = true;
+});
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; if (state === 'play') go('pause'); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'play') go('pause'); });
+
+document.querySelectorAll('.b').forEach(b => {
+  const k = b.dataset.k;
+  const down = e => {
+    e.preventDefault(); audioInit(); b.classList.add('on');
+    if (k === 'pause') { togglePause(); return; }
+    touch[k] = true;
+    if (k === 'jump') ev.jump = true;
+    if (k === 'up') ev.enter = true;
+    if (k === 'fire') ev.fire = true;
+  };
+  const up = e => { e.preventDefault(); b.classList.remove('on'); if (k !== 'pause') touch[k] = false; };
+  b.addEventListener('pointerdown', down);
+  b.addEventListener('pointerup', up);
+  b.addEventListener('pointercancel', up);
+  b.addEventListener('pointerleave', up);
+});
+
+if (window.matchMedia && matchMedia('(pointer: coarse)').matches) document.body.classList.add('touch');
+addEventListener('touchstart', () => document.body.classList.add('touch'), { once:true, passive:true });
+
+function toGame(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height };
+}
+cv.addEventListener('pointerdown', e => {
+  audioInit(); try { cv.focus(); } catch (x) {}
+  if (e.pointerType === 'touch') document.body.classList.add('touch');
+  if (state === 'start') { go('title'); return; }
+  const p = toGame(e), it = layout();
+  for (let i = 0; i < it.length; i++) {
+    const o = it[i];
+    if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h) { sel = i; activate(o); return; }
+  }
+});
+cv.addEventListener('pointermove', e => {
+  if (e.pointerType !== 'mouse') return;
+  const p = toGame(e), it = layout();
+  for (let i = 0; i < it.length; i++) {
+    const o = it[i];
+    if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h) sel = i;
+  }
+});
+
+/* ===================== GAME STATE ===================== */
+let state = 'start', sel = 0, resetArm = 0, frameN = 0;
+let L = null, year = 1, pts = 0, runPay = 0, hearts = 3, pl = null, cam = 0;
+let bullets = [], shots = [], parts = [], pops = [], conf = [], checkHit = false, endReason = '', lossT = 0, fundT = 0, mobT = 0, dd214T = 0, shopT = 0, atDoor = false;
+
+function go(s) { state = s; sel = 0; resetArm = 0; document.body.dataset.state = s; if (s === 'loss') lossT = 70; syncMusic(); }
+function togglePause() { if (state === 'play') go('pause'); else if (state === 'pause') go('play'); }
+function fmt(n) { return Math.round(n).toLocaleString('en-US'); }
+
+function notify(type) {
+  try {
+    if (window.parent && window.parent !== window)
+      window.parent.postMessage({ type, year, goodYears: prog.years, points: pts, drillPay: runPay }, '*');
+  } catch (e) {}
+}
+function exitCourse() { notify('roa-good-year-exit'); go('title'); }
+
+/* ===================== LEVEL GENERATION ===================== */
+function rng(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function mkEnemy(t, x, gy) {
+  const e = { t, x, y: gy + 2, w: 14, h: 14, vx: 0, vy: 0, dir: -1, hp: 1, tm: 0, flash: 0, dead: false, onG: false };
+  if (t === 'email') { e.y = gy - 2 * T; e.baseY = e.y; e.h = 10; }
+  if (t === 'unpaid') { e.w = 36; e.h = 40; e.y = gy + T - 40; e.hp = 6; e.dir = -1; }
+  if (t === 'dfas') { e.y = gy - 3 * T; e.w = 16; e.h = 11; e.hp = 2; }
+  if (t === 'dts') { e.hp = 2; e.tm = Math.floor(x) % 60; }
+  if (t === 'ppt') { e.hp = 3; e.y = gy; e.h = 16; e.tm = 30; }
+  if (t === 'boss') { e.hp = 5; e.w = 32; e.h = 48; e.y = gy + T - 48; e.homeX = x; e.inv = 0; e.tm = 40; }
+  if (t === 'cobol') { e.t = 'boss'; e.kind = 'cobol'; e.hp = 10; e.maxHp = 10; e.w = 48; e.h = 56; e.y = gy + T - 56; e.homeX = x - 16; e.inv = 0; e.tm = 40; }
+  return e;
+}
+function enlarge(e) {   // mobilization enemies are twice the size and one hit tougher
+  const bottom = e.y + e.h;
+  e.w *= 2; e.h *= 2; e.hp += 1; e.big = true;
+  if (e.t === 'email') { e.baseY -= 10; e.y = e.baseY; } else e.y = bottom - e.h;
+  return e;
+}
+
+function genLevel(y, mob) {
+  const r = rng(y * 7919 + 101 + (mob ? 55555 : 0)), d = (y - 1) / 19;
+  const ri = (a, b) => a + Math.floor(r() * (b - a + 1));
+  const pick = a => a[Math.floor(r() * a.length)];
+  const shuf = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const cols = (mob ? 116 : 96) + y * 4, g = [];
+  for (let i = 0; i < ROWS; i++) g.push(new Uint8Array(cols));
+  const Lv = { cols, g, items: [], enemies: [], checkX: 0, checkY: 8, flagX: 0, flagY: 8, spawn: { x: 2 * T, y: 0 }, goodFlag: false, targets: [], mob: !!mob,
+    theme: mob ? (y % 2 ? 'jungle' : (y % 4 === 0 ? 'arctic' : 'forest')) : null, jrsoiX: 462 };
+  const col = (c, h) => { for (let i = h; i < ROWS; i++) g[i][c] = 1; };
+  const foes = Object.keys(FOES).filter(k => FOES[k].year <= y || (mob && k === 'email'));
+  const foe = (x, gy) => { const e = mkEnemy(pick(foes), x, gy); Lv.enemies.push(mob ? enlarge(e) : e); };
+  const slots = [];
+  let h = 8, c = 0, atDone = false, cpDone = false;
+
+  for (; c < (mob ? 36 : 8); c++) col(c, h);   // mobilization levels open with pre-mob buildings and JRSOI
+  Lv.spawn.y = (h - 1) * T + 2;
+
+  const bossYear = !mob && y % 2 === 0;
+  const wantCar = !mob && (y === 1 || y % 3 === 0);                       // IDT TRAVEL car every third year
+  const wantAdos = !mob && y % 4 === 0 && y < 20;            // ADOS orders in years 4, 8, 12 and 16
+  let carDone = false, adosDone = false;
+  while (c < cols - (bossYear ? 28 : 14)) {
+    if (!mob && !Lv.commX && c > cols * 0.28) {   // flat stretch with the Commissary/Exchange
+      for (let i = 0; i < 8; i++, c++) col(c, h);
+      Lv.commX = (c - 7) * T; Lv.commY = h; continue;
+    }
+    if (!cpDone && c > cols * 0.5) {
+      for (let i = 0; i < 5; i++, c++) col(c, h);
+      Lv.checkX = (c - 3) * T; Lv.checkY = h; cpDone = true; continue;
+    }
+    const k = r();
+    if (k < 0.2) {                       // pit
+      const w = ri(2, 2 + Math.round(d));
+      for (let i = 0; i < w; i++, c++) if (i === Math.floor(w / 2)) slots.push({ x: c * T + 2, y: (h - 4) * T });
+      for (let i = 0; i < 2; i++, c++) col(c, h);
+    } else if (k < 0.36) {               // step up or down
+      h = Math.max(6, Math.min(9, h + (r() < 0.5 ? -1 : 1)));
+      const len = ri(3, 6);
+      for (let i = 0; i < len; i++, c++) col(c, h);
+      slots.push({ x: (c - 2) * T + 2, y: (h - 2) * T });
+    } else if (k < 0.58) {               // filing-cabinet platform
+      const len = ri(5, 8), s = c;
+      for (let i = 0; i < len; i++, c++) col(c, h);
+      const py = h - 3, pw = ri(3, 4);
+      for (let i = 0; i < pw; i++) g[py][s + 1 + i] = 2;
+      slots.push({ x: (s + 1) * T + 2, y: (py - 1) * T });
+      if (!mob && !atDone && c > cols * 0.25 && r() < 0.5) { Lv.items.push({ t: 'at', x: (s + 2) * T + 2, y: (py - 1) * T }); atDone = true; }
+      else if (r() < 0.35) {
+        const pk = r();
+        if (pk < 0.33) Lv.items.push({ t: 'shield', x: (s + 2) * T + 2, y: (py - 1) * T });
+        else if (pk < 0.66) Lv.items.push({ t: 'heart', x: (s + 2) * T + 2, y: (py - 1) * T });
+        else Lv.items.push({ t: 'trs', x: (s + 2) * T - 2, y: py * T - 20, w: 21, h: 18 });
+      }
+      if (r() < 0.4 + d * 0.5) foe((c - 1) * T, (h - 1) * T);
+    } else if (k < 0.72 && y >= 2) {     // red tape spikes
+      const len = 6, n = 1 + (d > 0.5 ? 1 : 0), s = c;
+      for (let i = 0; i < len; i++, c++) col(c, h);
+      for (let i = 0; i < n; i++) g[h - 1][s + 2 + i] = 3;
+      slots.push({ x: (s + 2) * T + 2, y: (h - 4) * T });
+    } else {                             // flat ground with threats
+      const len = ri(5, 9), s = c;
+      for (let i = 0; i < len; i++, c++) { col(c, h); if (r() < 0.22) Lv.items.push({ t: 'pay', x: c * T + 2, y: (h - 1) * T + 2 }); }
+      if (wantCar && !carDone && c > cols * 0.15) {
+        Lv.targets.push({ t: 'car', x: (s + 1) * T, y: h * T - 10, baseY: h * T - 10, w: 18, h: 10, hp: 1, flash: 0 }); carDone = true;
+      } else if (wantAdos && !adosDone && c > cols * 0.4) {
+        Lv.targets.push({ t: 'ados', x: (s + 2) * T, y: h * T - 56, baseY: h * T - 56, w: 16, h: 16, hp: 6, flash: 0 }); adosDone = true;
+      }
+      foe((c - 2) * T, (h - 1) * T);
+      if (r() < d * 0.8) foe((s + 1) * T, (h - 1) * T);
+      slots.push({ x: (s + 3) * T + 2, y: (h - 2) * T });
+    }
+  }
+  for (; c < cols; c++) col(c, h);
+  Lv.flagX = (cols - 6) * T; Lv.flagY = h;
+  // one giant pile of UNPAID UNIT TASKS AND TRAINING per level, on a flat stretch
+  for (let cc = Math.floor(cols * (mob ? 0.55 : 0.42)); cc < cols - 18; cc++) {
+    let top = -1;
+    for (let i = 0; i < ROWS; i++) if (g[i][cc] === 1) { top = i; break; }
+    let ok = top > 3;
+    for (let k = -2; ok && k <= 4; k++) if (g[top][cc + k] !== 1 || g[top - 1][cc + k] !== 0 || g[top - 2][cc + k] !== 0 || g[top - 3][cc + k] !== 0) ok = false;
+    if (ok) { Lv.enemies.push(mkEnemy('unpaid', cc * T, (top - 1) * T)); break; }
+  }
+  if (bossYear) { Lv.boss = mkEnemy(y % 4 === 0 ? 'cobol' : 'boss', (cols - 13) * T, (h - 1) * T); Lv.enemies.push(Lv.boss); }
+  if (wantCar && !carDone) Lv.targets.push({ t: 'car', x: 5 * T, y: 8 * T - 10, baseY: 8 * T - 10, w: 18, h: 10, hp: 1, flash: 0 });
+  if (wantAdos && !adosDone) Lv.targets.push({ t: 'ados', x: Lv.checkX + 8, y: Lv.checkY * T - 56, baseY: Lv.checkY * T - 56, w: 16, h: 16, hp: 6, flash: 0 });
+  if (!mob && !atDone) Lv.items.push({ t: 'at', x: (cols - 10) * T + 2, y: (h - 3) * T });
+
+  if (mob) {
+    for (let cc = 40; cc < cols - 16; cc += 5) {   // more (big) troops across the war zone
+      let top = -1;
+      for (let i = 0; i < ROWS; i++) if (g[i][cc] === 1) { top = i; break; }
+      if (top > 2 && g[top - 1][cc] === 0 && r() < 0.55 + d * 0.35) foe(cc * T, (top - 1) * T);
+    }
+    for (let k = 0; k < 2 + Math.floor(d * 3); k++) {   // extra reply-all flyers overhead
+      Lv.enemies.push(enlarge(mkEnemy('email', (40 + Math.floor(r() * (cols - 60))) * T, 7 * T)));
+    }
+    Lv.items.push({ t: 'prime', x: 296, y: 4 * T, w: 32, h: 24 });
+    // pre-mobilization processing stations: shoot each one to clear it (+$250)
+    [['SHOTS!', '', 48, 112, 'syringe', 'SHOTS DONE'],
+     ['YOUR', 'WILL!', 96, 80, 'will', 'WILL SIGNED'],
+     ['LAW OF WAR', 'TRAINING', 150, 112, 'book', 'TRAINED'],
+     ['PAY', 'REVIEW', 206, 80, 'pay', 'PAY CHECKED'],
+     ['DEERS', 'UPDATE', 252, 112, 'card', 'DEERS UPDATED'],
+     ['NEW', 'EQUIPMENT!', 340, 112, 'helmet', 'GEAR ISSUED']].forEach(([l1, l2, x, y, ico, done]) =>
+      Lv.targets.push({ t: 'premob', l1, l2, ico, done, x, y, baseY: y, w: 14, h: 14, hp: 1, flash: 0 }));   // TRICARE PRIME at the mobilization station
+    Lv.targets.push({ t: 'tamp', x: (cols - 11) * T, y: h * T - 58, baseY: h * T - 58, w: 24, h: 14, hp: 1, flash: 0 });   // TAMP bonus
+  }
+  // guarantee at least one TRS heart per year
+  if (!Lv.items.some(it => it.t === 'trs')) {
+    for (let cc = Math.floor(cols * 0.3); cc < cols - 12; cc++) {
+      let top = -1;
+      for (let i = 0; i < ROWS; i++) if (g[i][cc] === 1) { top = i; break; }
+      if (top > 3 && g[top - 1][cc] === 0 && g[top - 1][cc + 1] === 0 && g[top - 2][cc] === 0) {
+        Lv.items.push({ t: 'trs', x: cc * T - 2, y: (top - 2) * T - 4, w: 21, h: 18 }); break;
+      }
+    }
+  }
+  // 12 drill weekends per year, 4 points each
+  const extra = [];
+  for (let cc = 10; cc < cols - 12; cc += 5) {
+    let top = -1;
+    for (let i = 0; i < ROWS; i++) if (g[i][cc] === 1) { top = i; break; }
+    if (top > 2 && g[top - 1][cc] === 0 && g[top - 2][cc] === 0) extra.push({ x: cc * T + 2, y: (top - 2) * T });
+  }
+  const pool = shuf(slots).concat(shuf(extra)), used = new Set();
+  let n = 0;
+  for (const s of pool) {
+    if (mob) break;   // no drill weekends while mobilized: the 365 points come at the end
+    const key = Math.round(s.x / T);
+    if (used.has(key)) continue;
+    used.add(key);
+    Lv.items.push({ t: 'drill', x: s.x, y: s.y });
+    if (++n >= 12) break;
+  }
+  return Lv;
+}
+
+function startYear(y) {
+  year = y; L = genLevel(y);
+  pts = 15; runPay = 0; hearts = 3; checkHit = false; endReason = ''; fundT = 0;
+  bullets = []; shots = []; parts = []; pops = []; conf = [];
+  pl = newPl(); mobT = 0; dd214T = 0; shopT = 0;
+  addHeli(); addEvents();
+  cam = 0;
+  go('intro');
+}
+const CONT_PAY = { 8: 8000, 9: 10000, 10: 12000, 11: 14000, 12: 16000 };
+function addHeli() {
+  // the helicopter keeps coming each year 8-12 until the player takes the money
+  if (!CONT_PAY[year] || prog.contPay) return;
+  L.heli = { trigX: (L.mob ? Math.floor(L.cols * 0.35) : Math.floor(L.cols * 0.22)) * T, st: 'wait', x: 0, y: 22, amt: CONT_PAY[year] };
+}
+function addEvents() {
+  L.shutT = 0;
+  // about half of regular years from year 3 on hit a 10-second government shutdown
+  if (!L.mob && year >= 3 && Math.random() < 0.5) L.shutAt = Math.floor(L.cols * (0.25 + Math.random() * 0.4)) * T;
+  // ROA Law Center: years 2, 5, 8, 11, 14, 17, unless you're already protected
+  if (!L.mob && year % 3 === 2 && !prog.lawShield) {
+    for (let cc = Math.floor(L.cols * 0.62); cc < L.cols - 14; cc++) {
+      let top = -1;
+      for (let i = 0; i < ROWS; i++) if (L.g[i][cc] === 1) { top = i; break; }
+      if (top > 4) { L.targets.push({ t: 'law', x: cc * T, y: top * T - 58, baseY: top * T - 58, w: 16, h: 18, hp: 1, flash: 0 }); break; }
+    }
+  }
+}
+function newPl() {
+  return { x: L.spawn.x, y: L.spawn.y, w: 10, h: 14, vx: 0, vy: 0, face: 1, onG: false, co: 0, buf: 0, inv: 0, shield: 0, cd: 0, run: 0, car: 0 };
+}
+function enterMob() {
+  // points, pay and hearts carry over into the mobilization level
+  L = genLevel(year, true);
+  bullets = []; shots = []; parts = []; pops = []; checkHit = false; fundT = 0;
+  pl = newPl(); pl.inv = 60; cam = 0;
+  addHeli(); addEvents();
+  syncMusic();   // switch to the mobilization track now (the screen itself doesn't change)
+}
+function mobComplete() {
+  pts += 365;
+  prog.years = Math.max(prog.years, year); prog.pay += runPay; prog.cleared++; save();
+  notify('roa-good-year-complete');
+  go('mobwin'); confetti();
+}
+
+/* ===================== PHYSICS ===================== */
+function solidPt(x, y) {
+  const c = Math.floor(x / T), r = Math.floor(y / T);
+  if (c < 0 || c >= L.cols) return true;
+  if (r < 0 || r >= ROWS) return false;
+  const v = L.g[r][c];
+  return v === 1 || v === 2;
+}
+function hitsSolid(o) {
+  const x0 = Math.floor(o.x / T), x1 = Math.floor((o.x + o.w - 0.01) / T);
+  const y0 = Math.floor(o.y / T), y1 = Math.floor((o.y + o.h - 0.01) / T);
+  for (let r = y0; r <= y1; r++) for (let c = x0; c <= x1; c++) {
+    if (c < 0 || c >= L.cols) return true;
+    if (r < 0 || r >= ROWS) continue;
+    const v = L.g[r][c];
+    if (v === 1 || v === 2) return true;
+  }
+  return false;
+}
+function move(o) {
+  let hitX = false;
+  o.x += o.vx;
+  if (hitsSolid(o)) {
+    if (o.vx > 0) o.x = Math.floor((o.x + o.w) / T) * T - o.w - 0.001;
+    else if (o.vx < 0) o.x = (Math.floor(o.x / T) + 1) * T;
+    o.vx = 0; hitX = true;
+  }
+  o.y += o.vy; o.onG = false;
+  if (hitsSolid(o)) {
+    if (o.vy > 0) { o.y = Math.floor((o.y + o.h) / T) * T - o.h - 0.001; o.onG = true; }
+    else if (o.vy < 0) o.y = (Math.floor(o.y / T) + 1) * T;
+    o.vy = 0;
+  }
+  return hitX;
+}
+const hit = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+function touchesSpike(p) {
+  const x0 = Math.floor(p.x / T), x1 = Math.floor((p.x + p.w) / T);
+  const y0 = Math.floor(p.y / T), y1 = Math.floor((p.y + p.h) / T);
+  for (let r = Math.max(0, y0); r <= Math.min(ROWS - 1, y1); r++)
+    for (let c = Math.max(0, x0); c <= Math.min(L.cols - 1, x1); c++)
+      if (L.g[r][c] === 3 && hit(p, { x: c * T + 2, y: r * T + 8, w: 12, h: 8 })) return true;
+  return false;
+}
+
+/* ===================== EFFECTS ===================== */
+function pop(x, y, s, col) { pops.push({ x, y, s, col, life: 60 }); }
+function burst(x, y, col) {
+  for (let i = 0; i < 10; i++) parts.push({ x, y, vx: (Math.random() - 0.5) * 3, vy: -Math.random() * 3, life: 30, col });
+}
+function confetti() {
+  conf = [];
+  const cols = [C.gold, C.red, C.paper, C.steel, C.green];
+  for (let i = 0; i < 90; i++) conf.push({ x: Math.random() * W, y: -Math.random() * H, vy: 0.4 + Math.random(), vx: (Math.random() - 0.5) * 0.6, col: cols[i % cols.length] });
+}
+
+/* ===================== GAMEPLAY ===================== */
+function recoup(e) {
+  if (pl.inv > 0) return;
+  const amt = Math.min(500, runPay);
+  e.dead = true; burst(e.x + e.w / 2, e.y + e.h / 2, '#d9c38a');
+  if (amt <= 0) { hurt(e); return; }   // nothing left to take: it costs you a heart instead
+  runPay -= amt; pl.inv = 45;
+  pop(pl.x - 40, pl.y - 24, 'RECOUPED! -$' + fmt(amt), C.red); sfx.no(); sfx.hurt();
+}
+function hurt(src) {
+  if (pl.inv > 0 || pl.shield > 0) return;
+  hearts--; pl.inv = 90; pl.vy = -3.5;
+  pl.vx = src ? (pl.x < src.x ? -2.5 : 2.5) : -pl.face * 2.5;
+  sfx.hurt(); burst(pl.x + 5, pl.y + 7, C.red);
+  if (hearts <= 0) { endReason = 'hearts'; go('bad'); sfx.lose(); }
+}
+function fall() {
+  hearts--; sfx.hurt();
+  if (hearts <= 0) { endReason = 'hearts'; go('bad'); sfx.lose(); return; }
+  const sx = checkHit ? L.checkX : L.spawn.x;
+  const sy = checkHit ? (L.checkY - 1) * T + 2 : L.spawn.y;
+  Object.assign(pl, { x: sx, y: sy, vx: 0, vy: 0, inv: 90 });
+  cam = Math.max(0, Math.min(L.cols * T - W, sx - W * 0.4));
+  pop(sx - 30, sy - 14, 'FALL IN!', C.paper);
+}
+function damage(e, n) {
+  if (e.t === 'boss') { if (e.inv > 0) return; e.inv = 18; n = 1; }
+  e.hp -= n; e.flash = 6;
+  if (e.hp > 0) sfx.hit();
+  if (e.hp <= 0) {
+    e.dead = true; sfx.boom(e.t === 'ppt' || e.t === 'dts');
+    burst(e.x + e.w / 2, e.y + e.h / 2, e.t === 'tape' ? C.red : e.t === 'dfas' ? '#d9c38a' : e.t === 'ppt' ? '#e8752a' : e.t === 'dts' ? '#1d5fd1' : C.paper);
+    if (e.t === 'unpaid') {
+      const cx = e.x + e.w / 2, cy = e.y + e.h / 2;
+      for (let i = 0; i < 100; i++) {
+        const a = Math.random() * Math.PI * 2, sp = 1 + Math.random() * 3.5;
+        parts.push({ x: cx + (Math.random() - 0.5) * e.w, y: cy + (Math.random() - 0.5) * e.h, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2, life: 60 + Math.floor(Math.random() * 40), flash: true, k: i });
+      }
+      sfx.boom(true); setTimeout(() => sfx.boom(true), 180); setTimeout(() => sfx.boom(false), 380);
+      pop(e.x - 30, e.y - 30, 'TASKS COMPLETE!', C.green);
+      pop(e.x - 30, e.y - 18, '...STILL UNPAID.', '#9aa0a8');
+      return;
+    }
+    if (e.t === 'boss') {
+      sfx.boom(true); setTimeout(() => sfx.boom(true), 250);
+      for (let i = 0; i < 6; i++) burst(e.x + Math.random() * e.w, e.y + Math.random() * e.h, i % 2 ? C.paper : '#efe8d2');
+      if (e.kind === 'cobol') {
+        for (let i = 0; i < 4; i++) burst(e.x + Math.random() * e.w, e.y + Math.random() * e.h, i % 2 ? '#9aa0a8' : C.gold);
+        payPop(e.x - 50, e.y - 12, earn(1000), 'PAY SYSTEM CRASHED! +$1000');
+      } else payPop(e.x - 40, e.y - 12, earn(500), 'STACK SHREDDED! +$500');
+      return;
+    }
+    const bonus = e.t === 'ppt' ? 100 : e.t === 'dts' || e.t === 'dfas' ? 50 : 25;
+    payPop(e.x, e.y - 10, earn(bonus));
+  }
+}
+function earn(n) {   // during a government shutdown you work for free
+  if (L && L.shutT > 0) return 0;
+  runPay += n; return n;
+}
+function payPop(x, y, n, label) {
+  pop(x, y, n > 0 ? (label || '+$' + fmt(n)) : 'UNPAID!', n > 0 ? C.gold : '#9aa0a8');
+}
+function collect(it) {
+  it.got = true;
+  switch (it.t) {
+    case 'drill': pts += 4; earn(250); pop(it.x - 8, it.y - 10, '+4 PTS', C.green); sfx.coin(); break;
+    case 'at': pts += 15; earn(1500); pop(it.x - 24, it.y - 10, 'AT +15 PTS', C.gold); sfx.power(); break;
+    case 'pay': payPop(it.x - 8, it.y - 10, earn(25)); sfx.coin(); break;
+    case 'shield': pl.shield = 420; pop(it.x - 40, it.y - 10, 'USERRA SHIELD', C.steel); sfx.power(); break;
+    case 'prime':
+      hearts = Math.min(5, hearts + 1); pop(it.x - 50, it.y - 10, 'TRICARE PRIME +1 HEART', C.red); sfx.power(); break;
+    case 'trs':
+      hearts = Math.min(5, hearts + 1); pop(it.x - 30, it.y - 10, 'TRS +1 HEART', C.red); sfx.power(); break;
+    case 'heart':
+      if (hearts < 3) { hearts++; pop(it.x - 36, it.y - 10, 'PHA DONE +1', C.red); }
+      else payPop(it.x - 8, it.y - 10, earn(100));
+      sfx.power(); break;
+  }
+  if (pts >= 50 && !L.goodFlag) { L.goodFlag = true; pop(pl.x - 60, pl.y - 26, '50 PTS! RUN FOR THE FLAG', C.green); }
+}
+function adosOrders() {
+  // ADOS = a full year of points: this year AND next year are credited
+  const credit = Math.min(20, year + 1);
+  prog.years = Math.max(prog.years, credit); prog.pay += runPay + 3000; prog.cleared++; save();
+  notify('roa-good-year-ados');
+  go('ados'); sfx.win(); confetti();
+}
+function endYear() {
+  if (pts >= 50) {
+    prog.cleared++;
+    L.lawSaved = false;
+    if (prog.cleared >= prog.lossAt && year >= 3 && year < 20 && prog.lawShield) {
+      // ROA Law Center steps in: the data loss is blocked and the protection is used up
+      prog.lossAt = rollLoss(prog.cleared); prog.lawShield = false; L.lawSaved = true;
+    }
+    if (prog.cleared >= prog.lossAt && year >= 3 && year < 20) {
+      // DATA LOSS: this year's points vanish and the record drops two years
+      prog.lossAt = rollLoss(prog.cleared);
+      prog.years = Math.max(0, year - 2);
+      pts = 0; save();
+      notify('roa-good-year-data-loss');
+      go('loss'); sfx.glitch();
+      return;
+    }
+    prog.years = Math.max(prog.years, year); prog.pay += runPay; save();
+    notify('roa-good-year-complete');
+    go('win'); sfx.win(); confetti();
+  } else { endReason = 'points'; go('bad'); sfx.lose(); }
+}
+
+function stepEnemy(e) {
+  e.tm++; if (e.flash > 0) e.flash--;
+  const dirTo = pl.x < e.x ? -1 : 1;
+  if (e.t === 'tape' || e.t === 'unpaid') {
+    e.vx = e.dir * (e.t === 'unpaid' ? 0.3 : 0.55); e.vy = Math.min(e.vy + 0.35, 7);
+    if (move(e)) e.dir *= -1;
+    if (e.onG) { const fx = e.dir > 0 ? e.x + e.w + 1 : e.x - 1; if (!solidPt(fx, e.y + e.h + 2)) e.dir *= -1; }
+  } else if (e.t === 'dts') {
+    e.vy = Math.min(e.vy + 0.3, 7);
+    if (e.onG) { e.vx = 0; if (e.tm % 75 === 0) { e.vy = -4.8; e.vx = dirTo * 1.1; } }
+    move(e);
+  } else if (e.t === 'email') {
+    e.x += dirTo * 0.55; e.y = e.baseY + Math.sin(e.tm * 0.06) * 10;
+  } else if (e.t === 'dfas') {
+    // homes in on you once you're close: the letter always finds you
+    if (Math.abs(pl.x - e.x) < 220) {
+      e.x += dirTo * 0.75;
+      const ty = pl.y + pl.h / 2 - e.h / 2;
+      e.y += Math.max(-0.5, Math.min(0.5, ty - e.y)) + Math.sin(e.tm * 0.1) * 0.3;
+    }
+  } else if (e.t === 'ppt') {
+    e.dir = dirTo;
+    if (e.tm % 110 === 0 && Math.abs(pl.x - e.x) < 220) {
+      shots.push({ x: e.x + (dirTo > 0 ? e.w : -6), y: e.y + (e.big ? 10 : 4), vx: dirTo * 1.7, w: 6, h: 4, life: 200 });
+      sfx.slide();
+    }
+  }
+  else if (e.t === 'boss') {
+    if (e.inv > 0) e.inv--;
+    e.vx = e.dir * 0.45; e.vy = Math.min(e.vy + 0.35, 7);
+    if (move(e)) e.dir *= -1;
+    if (e.x < e.homeX - 80) e.dir = 1;
+    if (e.x > e.homeX + 16) e.dir = -1;
+    if (e.kind === 'cobol') {
+      // the pay system spits punch cards straight at you and lobs tape reels
+      if (e.tm % 55 === 0 && Math.abs(pl.x - e.x) < 260) {
+        shots.push({ x: e.x + (dirTo > 0 ? e.w : -10), y: e.y + 34, vx: dirTo * 2.3, w: 10, h: 5, life: 200, card: true });
+        sfx.slide();
+      }
+      if (e.tm % 130 === 65 && Math.abs(pl.x - e.x) < 260) {
+        shots.push({ x: e.x + e.w / 2 - 4, y: e.y + 2, vx: dirTo * (1.2 + Math.random() * 1.2), vy: -4, g: 0.13, w: 9, h: 9, life: 260, reel: true });
+        sfx.hit();
+      }
+    } else if (e.tm % 80 === 0 && Math.abs(pl.x - e.x) < 240) {   // hurls a page of regulations
+      shots.push({ x: e.x + e.w / 2 - 3, y: e.y + 4, vx: dirTo * (1.1 + Math.random() * 1.3), vy: -3.6, g: 0.12, w: 7, h: 7, life: 240, paper: true });
+      sfx.slide();
+    }
+  }
+  if (e.y > H + 20) e.dead = true;
+}
+
+function stepPlay() {
+  // "NO IDT TRAVEL FUNDING!!" freezes the action while it flashes
+  if (fundT > 0) { fundT--; if (fundT === 0) pl.inv = 60; return; }
+  // "MOBILIZATION! PACK YOUR BAGS!" flashes for 2 seconds, then the war level loads
+  if (mobT > 0) { mobT--; if (mobT === 0) enterMob(); return; }
+  if (dd214T > 0) { dd214T--; if (dd214T === 0) mobComplete(); return; }
+  if (shopT > 0) { shopT--; return; }   // inside the store
+  // ADOS orders: short celebration, then jump ahead a year
+  if (L.adosT > 0) { L.adosT--; stepFx(); if (L.adosT === 0) adosOrders(); return; }
+  const p = pl, l = hold.left(), r = hold.right(), vmax = p.car > 0 ? 2.6 : 2;
+  if (l && !r) { p.vx = Math.max(p.vx - 0.3, -vmax); p.face = -1; }
+  else if (r && !l) { p.vx = Math.min(p.vx + 0.3, vmax); p.face = 1; }
+  else { p.vx *= 0.7; if (Math.abs(p.vx) < 0.05) p.vx = 0; }
+
+  p.co = p.onG ? 6 : p.co - 1;
+  p.buf = ev.jump ? 7 : p.buf - 1;
+  if (p.buf > 0 && p.co > 0) { p.vy = p.car > 0 ? -9.2 : -6.5; p.buf = 0; p.co = 0; p.onG = false; if (p.car > 0) sfx.honk(); else sfx.jump(); }
+  if (!hold.jump() && p.vy < -2.5) p.vy = -2.5;
+  p.vy = Math.min(p.vy + 0.35, 7);
+  move(p);
+  if (Math.abs(p.vx) > 0.2 && p.onG) p.run++;
+  if (p.inv > 0) p.inv--;
+  if (p.shield > 0) p.shield--;
+  if (p.car > 0) {   // IDT TRAVEL car lasts 6 seconds
+    p.car--;
+    if (p.car === 0) { fundT = 110; sfx.fundFail(); burst(p.x + 5, p.y + 10, C.gold); burst(p.x + 5, p.y + 10, '#111'); }
+  }
+
+  if (p.cd > 0) p.cd--;
+  if ((ev.fire || hold.fire()) && p.cd <= 0) {
+    bullets.push({ x: p.face > 0 ? p.x + p.w : p.x - 6, y: p.y + 6, vx: 4.5 * p.face, life: 36, w: 6, h: 3 });
+    p.cd = L.upgraded ? 6 : 13; sfx.shoot();
+  }
+
+  if (p.y > H + 8) {
+    if (L.mob) fall(); else { mobT = 120; p.vy = 0; sfx.mobilize(); }
+    return;
+  }
+  if (touchesSpike(p)) hurt(null);
+  if (state !== 'play') return;
+
+  for (const b of bullets) { b.x += b.vx; b.life--; if (b.life <= 0 || solidPt(b.x + 3, b.y + 1)) b.dead = true; }
+
+  for (const e of L.enemies) {
+    if (e.dead || e.x > cam + W + 40 || e.x < cam - 80) continue;
+    stepEnemy(e);
+    for (const b of bullets) if (!b.dead && !e.dead && hit(b, e)) { b.dead = true; damage(e, 1); }
+    if (!e.dead && hit(p, e)) {
+      if (p.shield > 0) damage(e, 9);
+      else if (p.vy > 0 && p.y + p.h - e.y < 9) { damage(e, e.t === 'ppt' || e.t === 'unpaid' ? 1 : 9); p.vy = e.t === 'boss' ? -6 : -5; sfx.stomp(); }
+      else if (e.t === 'dfas') recoup(e);
+      else hurt(e);
+    }
+  }
+  if (state !== 'play') return;
+  L.enemies = L.enemies.filter(e => !e.dead);
+  const door = L.commX ? L.commX + 40 : -999;
+  const nowDoor = !L.commUsed && p.onG && p.x + p.w > door && p.x < door + 16 && Math.abs(p.y + p.h - L.commY * T) < 3;
+  if (nowDoor !== atDoor) { atDoor = nowDoor; document.body.classList.toggle('atdoor', atDoor); }
+  if (atDoor && ev.enter) {
+    L.commUsed = true; atDoor = false; document.body.classList.remove('atdoor');
+    hearts = Math.max(hearts, 3); shopT = 100; p.vx = 0; L.shopBonus = earn(500); sfx.shop();
+    return;
+  }
+  if (L.shutAt && !L.shutDone && p.x > L.shutAt) {
+    L.shutDone = true; L.shutT = 600;
+    pop(p.x - 80, p.y - 40, 'GOVERNMENT SHUTDOWN!', C.red);
+    pop(p.x - 60, p.y - 28, 'WORK FOR FREE!', C.paper);
+    sfx.shutdown();
+  }
+  if (L.shutT > 0 && --L.shutT === 0) { pop(p.x - 60, p.y - 30, 'FUNDING RESTORED!', C.green); sfx.coin(); }
+  const hl = L.heli;
+  if (hl && hl.st === 'wait' && p.x > hl.trigX) {
+    hl.st = 'fly'; hl.x = Math.max(cam + W + 20, p.x + W * 0.6 + 40);
+    pop(p.x - 60, 30, 'CONT PAY OFFER: $' + fmt(hl.amt), C.gold);
+    pop(p.x - 80, 42, 'SHOOT NOW, OR WAIT FOR MORE', C.paper);
+    sfx.chopper();
+  }
+  if (hl && hl.st === 'fly') {
+    hl.x -= 1.4;
+    if (!hl.dropped && hl.x < p.x + 90) {
+      hl.dropped = true;
+      L.targets.push({ t: 'cont', x: hl.x + 8, y: hl.y + 14, baseY: 92, w: 26, h: 14, hp: 1, flash: 0, amt: hl.amt, falling: true });
+    }
+    if (hl.x < cam - 80) hl.st = 'gone';
+  }
+  for (const tg of L.targets) {   // power-ups you shoot: IDT TRAVEL car and ADOS orders
+    if (tg.got) continue;
+    if (tg.flash > 0) tg.flash--;
+    if (tg.t === 'ados' || tg.t === 'tamp' || tg.t === 'premob' || tg.t === 'law') tg.y = tg.baseY + Math.sin(frameN * 0.05 + tg.x) * 3;
+    if (tg.t === 'cont') {
+      if (tg.falling) { tg.y += 0.45; if (tg.y >= tg.baseY) tg.falling = false; }
+      else tg.y = tg.baseY + Math.sin(frameN * 0.04) * 8;   // drifts on its parachute
+    }
+    for (const b of bullets) {
+      if (b.dead || !hit(b, tg)) continue;
+      b.dead = true; tg.hp--; tg.flash = 6;
+      if (tg.hp > 0) { sfx.hit(); continue; }
+      tg.got = true;
+      if (tg.t === 'law') {
+        prog.lawShield = true; save();
+        burst(tg.x + 8, tg.y + 8, C.gold); burst(tg.x + 8, tg.y + 8, C.navy);
+        pop(tg.x - 40, tg.y - 24, 'ROA LAW CENTER ON YOUR SIDE!', C.gold);
+        pop(tg.x - 40, tg.y - 12, 'BLOCKS ONE DATA LOSS', C.paper); sfx.power();
+      } else if (tg.t === 'cont') {
+        prog.contPay = year; prog.pay += tg.amt; save();
+        for (let i = 0; i < 3; i++) burst(tg.x + 13, tg.y + 7, i % 2 ? C.gold : C.green);
+        pop(tg.x - 30, tg.y - 24, 'CONTINUATION PAY!', C.gold);
+        pop(tg.x - 10, tg.y - 12, '+$' + fmt(tg.amt), C.green);
+        sfx.power(); sfx.coin(); sfx.coin();
+      } else if (tg.t === 'premob') {
+        burst(tg.x + 7, tg.y + 7, C.gold);
+        pop(tg.x - 16, tg.y - 30, tg.done, C.green); payPop(tg.x - 4, tg.y - 20, earn(250)); sfx.coin();
+      } else if (tg.t === 'tamp') {
+        burst(tg.x + 12, tg.y + 7, C.gold); burst(tg.x + 12, tg.y + 7, C.green);
+        payPop(tg.x - 20, tg.y - 14, earn(1000), 'TAMP! +$1000'); sfx.coin(); sfx.power();
+      } else if (tg.t === 'car') {
+        p.car = 360; pop(tg.x - 40, tg.y - 22, 'IDT TRAVEL APPROVED!', C.gold); sfx.vroom();
+      } else {
+        burst(tg.x + 8, tg.y + 8, C.red); burst(tg.x + 8, tg.y + 8, C.paper); burst(tg.x + 8, tg.y + 8, '#2b6be0');
+        pop(tg.x - 36, tg.y - 16, 'ADOS ORDERS!', C.gold); sfx.boom(true); sfx.power();
+        L.adosT = 60; p.inv = 120;
+      }
+      break;
+    }
+  }
+  bullets = bullets.filter(b => !b.dead);
+
+  for (const s of shots) {
+    s.x += s.vx; s.life--;
+    if (s.g) { s.vy += s.g; s.y += s.vy; }
+    if (s.life <= 0 || s.y > H || solidPt(s.x + 3, s.y + 2)) s.dead = true;
+    else if (hit(p, s)) { s.dead = true; hurt(s); }
+  }
+  shots = shots.filter(s => !s.dead);
+  if (state !== 'play') return;
+
+  for (const it of L.items) if (!it.got && hit(p, { x: it.x, y: it.y, w: it.w || 12, h: it.h || 12 })) collect(it);
+
+  if (!checkHit && p.x > L.checkX) { checkHit = true; pop(L.checkX - 36, L.checkY * T - 64, 'CHECKPOINT', C.steel); sfx.coin(); }
+  if (L.mob && !L.upgraded && p.x > L.jrsoiX) {   // weapon upgrade after JRSOI
+    L.upgraded = true; L.handF = frameN; sfx.power();
+    pop(p.x - 56, p.y - 74, 'JRSOI COMPLETE!', C.gold);
+    pop(p.x - 88, p.y - 62, 'WEAPON UPGRADE: 2X FIRE', C.green);
+  }
+  if (L.mob && p.x + p.w >= L.flagX + 4) { pop(p.x - 40, p.y - 20, '+365 PTS', C.gold); dd214T = 210; sfx.win(); return; }
+  if (p.x + p.w >= L.flagX + 4) {
+    if (L.boss && !L.boss.dead) {
+      p.x = L.flagX + 4 - p.w; p.vx = 0;
+      if (!L.lockMsg || frameN - L.lockMsg > 90) { L.lockMsg = frameN; pop(p.x - 100, p.y - 20, L.boss.kind === 'cobol' ? 'CRASH THE PAY SYSTEM FIRST!' : 'SHRED THE REG STACK FIRST!', C.red); }
+    } else { endYear(); return; }
+  }
+
+  const target = Math.max(0, Math.min(L.cols * T - W, p.x - W * 0.4));
+  cam += (target - cam) * 0.2;
+  stepFx();
+}
+function stepFx() {
+  for (const q of parts) { q.x += q.vx; q.y += q.vy; q.vy += 0.15; q.life--; }
+  parts = parts.filter(q => q.life > 0);
+  for (const q of pops) { q.y -= 0.4; q.life--; }
+  pops = pops.filter(q => q.life > 0);
+}
+function stepConfetti() {
+  for (const q of conf) { q.y += q.vy; q.x += q.vx; if (q.y > H) { q.y = -4; q.x = Math.random() * W; } }
+}
+
+/* ===================== MENUS ===================== */
+function items() {
+  const nextY = Math.min(20, prog.years + 1);
+  switch (state) {
+    case 'title': {
+      const a = [];
+      if (prog.years >= 20) {
+        a.push({ label: 'VIEW 20-YEAR LETTER', act: () => { confetti(); go('letter'); } });
+        a.push({ label: 'REPLAY YEAR 20', act: () => startYear(20) });
+      } else if (nextY <= MAXY) {
+        a.push({ label: (prog.years ? 'CONTINUE: YEAR ' : 'START: YEAR ') + nextY, act: () => startYear(nextY) });
+      } else {
+        a.push({ label: 'YEAR ' + nextY + ' LOCKED', enabled: false, act: () => {} });
+      }
+      a.push({ label: 'HOW TO PLAY', act: () => go('howto') });
+      a.push({ label: 'SOUND: ' + (muted ? 'OFF' : 'ON'), act: () => { muted = !muted; audioInit(); syncMusic(); } });
+      if (prog.years > 0) a.push({ label: resetArm > 0 ? 'TAP AGAIN TO RESET' : 'START NEW CAREER', act: () => {
+        if (resetArm > 0) { prog = { years: 0, pay: 0 }; save(); resetArm = 0; } else resetArm = 180;
+      } });
+      return a;
+    }
+    case 'howto': return [{ label: 'BACK', act: () => go('title') }];
+    case 'intro': return [{ label: 'REPORT FOR DUTY', act: () => go('play') }];
+    case 'pause': return [
+      { label: 'RESUME', act: () => go('play') },
+      { label: 'SOUND: ' + (muted ? 'OFF' : 'ON'), act: () => { muted = !muted; syncMusic(); } },
+      { label: 'RESTART YEAR', act: () => startYear(year) },
+      { label: 'QUIT TO TITLE', act: () => go('title') }
+    ];
+    case 'win': case 'mobwin': {
+      if (year >= 20) return [{ label: 'CLAIM 20-YEAR LETTER', act: () => { confetti(); go('letter'); } }];
+      const a = [], n = year + 1;
+      if (MODULE) a.push({ label: 'BACK TO COURSE', act: exitCourse });
+      if (n <= MAXY) a.push({ label: 'START YEAR ' + n, act: () => startYear(n) });
+      else a.push({ label: 'NEXT MODULE UNLOCKS YR ' + n, enabled: false, act: () => {} });
+      if (!MODULE) a.push({ label: 'TITLE SCREEN', act: () => go('title') });
+      return a;
+    }
+    case 'ados': {
+      if (prog.years >= 20) return [{ label: 'CLAIM 20-YEAR LETTER', act: () => { confetti(); go('letter'); } }];
+      const a = [], n = prog.years + 1;
+      if (MODULE) a.push({ label: 'BACK TO COURSE', act: exitCourse });
+      if (n <= MAXY) a.push({ label: 'START YEAR ' + n, act: () => startYear(n) });
+      else a.push({ label: 'NEXT MODULE UNLOCKS YR ' + n, enabled: false, act: () => {} });
+      if (!MODULE) a.push({ label: 'TITLE SCREEN', act: () => go('title') });
+      return a;
+    }
+    case 'loss': {
+      const a = [], n = Math.min(20, prog.years + 1);
+      if (MODULE) a.push({ label: 'BACK TO COURSE', act: exitCourse });
+      if (n <= MAXY) a.push({ label: 'START YEAR ' + n, act: () => startYear(n) });
+      if (!MODULE) a.push({ label: 'TITLE SCREEN', act: () => go('title') });
+      return a;
+    }
+    case 'bad': return [
+      { label: 'RETRY YEAR ' + year, act: () => startYear(year) },
+      MODULE ? { label: 'BACK TO COURSE', act: exitCourse } : { label: 'TITLE SCREEN', act: () => go('title') }
+    ];
+    case 'letter': {
+      const a = [{ label: 'TITLE SCREEN', act: () => go('title') }];
+      if (MODULE) a.unshift({ label: 'BACK TO COURSE', act: exitCourse });
+      return a;
+    }
+  }
+  return [];
+}
+const Y0 = { title: 92, howto: 158, intro: 148, pause: 76, win: 122, bad: 128, loss: 136, ados: 122, mobwin: 122, letter: 144 };
+function layout() {
+  const it = items(), y0 = Y0[state] || 120;
+  return it.map((o, i) => Object.assign({}, o, { x: 48, y: y0 + i * 17, w: 224, h: 15 }));
+}
+function activate(o) { if (!o) return; if (o.enabled === false) { sfx.no(); return; } sfx.sel(); o.act(); }
+function stepMenu() {
+  const it = items();
+  if (!it.length) return;
+  if (sel >= it.length) sel = it.length - 1;
+  if (ev.up) sel = (sel + it.length - 1) % it.length;
+  if (ev.down) sel = (sel + 1) % it.length;
+  if (ev.ok) activate(it[sel]);
+}
+
+/* ===================== DRAWING ===================== */
+function txt(s, x, y, col, size, align) {
+  size = size || 8;
+  ctx.font = size + 'px ' + FONT; ctx.textAlign = align || 'left'; ctx.textBaseline = 'top';
+  ctx.fillStyle = '#000'; ctx.fillText(s, Math.round(x) + 1, Math.round(y) + 1);
+  ctx.fillStyle = col || C.paper; ctx.fillText(s, Math.round(x), Math.round(y));
+}
+const txtC = (s, y, col, size) => txt(s, W / 2, y, col, size, 'center');
+function wrapC(s, y, maxW, col) {
+  ctx.font = '8px ' + FONT;
+  const lines = []; let cur = '';
+  for (const w of s.split(' ')) {
+    const t = cur ? cur + ' ' + w : w;
+    if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else cur = t;
+  }
+  if (cur) lines.push(cur);
+  lines.forEach((l, i) => txtC(l, y + i * 11, col));
+  return lines.length;
+}
+function panel(x, y, w, h, bg, edge) {
+  ctx.fillStyle = bg || 'rgba(0,13,38,.92)'; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = edge || C.steel;
+  ctx.fillRect(x, y, w, 1); ctx.fillRect(x, y + h - 1, w, 1); ctx.fillRect(x, y, 1, h); ctx.fillRect(x + w - 1, y, 1, h);
+}
+function pips(y) {
+  for (let i = 0; i < 20; i++) {
+    const x = W / 2 - 100 + i * 10;
+    ctx.fillStyle = '#000'; ctx.fillRect(x, y, 8, 8);
+    ctx.fillStyle = i < prog.years ? C.gold : '#22407a'; ctx.fillRect(x + 1, y + 1, 6, 6);
+  }
+}
+
+const hsh = i => ((Math.imul(i + 1013, 2654435761) >>> 0) % 1000) / 1000;
+function layer(scroll, speed, per, fn) {
+  const sp = scroll * speed, base = Math.floor(sp / per), off = -(sp - base * per);
+  for (let k = -1; k <= Math.ceil(W / per) + 1; k++) fn(Math.floor(off + k * per), base + k);
+}
+function tri(cx, base, hgt, colL, colR, cap) {   // stepped pixel mountain / tree
+  for (let r = 0; r < hgt; r++) {
+    const half = Math.floor(r * 0.9) + 1, yy = base - hgt + r;
+    const snow = cap && r < hgt * 0.3;
+    ctx.fillStyle = snow ? '#ffffff' : colL; ctx.fillRect(cx - half, yy, half, 1);
+    ctx.fillStyle = snow ? '#dceefa' : colR; ctx.fillRect(cx, yy, half, 1);
+  }
+}
+function pine(x, base, hgt, col) {
+  ctx.fillStyle = '#3a2614'; ctx.fillRect(x - 1, base - 6, 3, 6);
+  for (let t = 0; t < 3; t++) {
+    const th = Math.floor(hgt / 2.2), top = base - 6 - hgt + t * Math.floor(hgt / 3.4);
+    for (let r = 0; r < th; r++) { const half = Math.floor(r * 0.7) + 1; ctx.fillStyle = col; ctx.fillRect(x - half, top + r, half * 2 + 1, 1); }
+  }
+}
+function palm(x, gy) {
+  ctx.fillStyle = '#3d2b17';
+  for (let i = 0; i < 12; i++) ctx.fillRect(x + (i > 6 ? 1 : 0) + (i > 9 ? 1 : 0), gy - 4 * i - 4, 3, 4);
+  const tx = x + 3, ty = gy - 50;
+  ctx.fillStyle = '#0f4a30';
+  for (let j = 0; j < 14; j++) {
+    const dy = Math.floor(j * j / 16);
+    ctx.fillRect(tx + j, ty + dy, 2, 2); ctx.fillRect(tx - j, ty + dy, 2, 2);
+    ctx.fillRect(tx + Math.floor(j * 0.6), ty - 4 + Math.floor(dy * 0.5), 2, 2); ctx.fillRect(tx - Math.floor(j * 0.6), ty - 4 + Math.floor(dy * 0.5), 2, 2);
+  }
+}
+function bands(cols, y0, step) { cols.forEach((col, i) => { ctx.fillStyle = col; ctx.fillRect(0, y0 + i * step, W, i === cols.length - 1 ? H : step); }); }
+function drawThemeBG(scroll, th) {
+  if (th === 'jungle') {
+    ctx.fillStyle = '#08251c'; ctx.fillRect(0, 0, W, H);
+    bands(['#0b2f24', '#0e3a2b', '#124634', '#17533d'], 46, 16);
+    layer(scroll, 0.2, 96, (x, i) => {
+      ctx.fillStyle = '#1f6b48'; ctx.fillRect(x, 100, 96, 80);
+      ctx.fillRect(x + 8, 92 - hsh(i) * 8, 40, 12); ctx.fillRect(x + 52, 88 - hsh(i + 7) * 10, 36, 14); ctx.fillRect(x + 20, 84, 20, 8);
+    });
+    layer(scroll, 0.45, 112, (x, i) => { if (hsh(i) > 0.25) palm(x + Math.floor(hsh(i + 3) * 60), 150); });
+    ctx.fillStyle = '#2a7a3a';
+    layer(scroll, 0.7, 64, (x, i) => {
+      const len = 12 + Math.floor(hsh(i) * 30);
+      ctx.fillRect(x + 10, 0, 2, len); ctx.fillRect(x + 8, len, 6, 3);
+      ctx.fillRect(x + 40, 0, 2, Math.floor(len * 0.6)); ctx.fillRect(x + 38, Math.floor(len * 0.6), 5, 2);
+    });
+  } else if (th === 'arctic') {
+    ctx.fillStyle = '#5f9fd2'; ctx.fillRect(0, 0, W, H);
+    bands(['#78b2de', '#93c4e8', '#b0d6f1', '#cde6f7'], 30, 18);
+    ctx.fillStyle = 'rgba(120,255,200,.18)'; ctx.fillRect(0, 14, W, 3); ctx.fillRect(0, 20, W, 2);   // faint aurora
+    layer(scroll, 0.15, 120, (x, i) => tri(x + 60, 150, 70 + Math.floor(hsh(i) * 30), '#a9cbe6', '#93bbdc', true));
+    layer(scroll, 0.35, 90, (x, i) => tri(x + 45, 160, 45 + Math.floor(hsh(i + 5) * 25), '#e9f5fd', '#c2ddf2', false));
+    ctx.fillStyle = '#ffffff';
+    for (let i = 0; i < 50; i++) {
+      const fx = (((i * 53 - scroll * 0.3 + frameN * 0.15 * (i % 3)) % W) + W) % W, fy = (i * 29 + frameN * (0.3 + (i % 3) * 0.2)) % H;
+      ctx.fillRect(Math.floor(fx), Math.floor(fy), 1, 1);
+    }
+  } else {   // forest
+    ctx.fillStyle = '#4f84a8'; ctx.fillRect(0, 0, W, H);
+    bands(['#6597b8', '#7ea9c6', '#98bcd3', '#b2cfdf'], 40, 16);
+    layer(scroll, 0.15, 80, (x, i) => { ctx.fillStyle = '#5b7f6a'; ctx.fillRect(x, 118 - Math.floor(hsh(i) * 10), 80, 62); });
+    layer(scroll, 0.3, 40, (x, i) => pine(x + 20, 150, 34 + Math.floor(hsh(i) * 16), '#3c6b4f'));
+    layer(scroll, 0.55, 56, (x, i) => pine(x + 28, 170, 52 + Math.floor(hsh(i + 9) * 20), '#1f4d2b'));
+  }
+}
+function drawMobBuildings() {
+  const gy = 8 * T;
+  [[48, 56, 60], [112, 48, 46], [168, 64, 68]].forEach(([x, w, h], i) => {   // run-down pre-mob buildings
+    const y = gy - h;
+    ctx.fillStyle = '#6b6e70'; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = '#55585a'; ctx.fillRect(x - 2, y, w + 4, 3);
+    ctx.fillStyle = '#7a5a3a'; ctx.fillRect(x + 4, y + 3, 2, 7); ctx.fillRect(x + w - 9, y + 3, 2, 5);
+    for (let wy = y + 10; wy < gy - 20; wy += 16) for (let wx = x + 6; wx < x + w - 10; wx += 14) {
+      ctx.fillStyle = '#2a2c2e'; ctx.fillRect(wx, wy, 8, 8);
+      if ((wx + wy + i) % 3 === 0) { ctx.fillStyle = '#7a5a32'; ctx.fillRect(wx - 1, wy + 2, 10, 2); ctx.fillRect(wx - 1, wy + 5, 10, 2); }
+      else { ctx.fillStyle = '#8a8d90'; ctx.fillRect(wx + 2, wy + 1, 1, 3); ctx.fillRect(wx + 3, wy + 4, 1, 2); }
+    }
+    ctx.fillStyle = '#4d5052';
+    for (let j = 0; j < 5; j++) ctx.fillRect(x + w - 14 + j, y + 8 + j * 3, 1, 3);
+    ctx.fillStyle = '#3a3c3e'; ctx.fillRect(x + Math.floor(w / 2) - 5, gy - 14, 10, 14);
+  });
+  ctx.fillStyle = '#55585a'; ctx.fillRect(80, 52, 2, 16); ctx.fillRect(200, 52, 2, 8);
+  ctx.fillStyle = '#3e4143'; ctx.fillRect(60, 26, 160, 26);
+  ctx.fillStyle = '#8a8d90'; ctx.fillRect(60, 26, 160, 1); ctx.fillRect(60, 51, 160, 1); ctx.fillRect(60, 26, 1, 26); ctx.fillRect(219, 26, 1, 26);
+  txt('PRE MOB TRAINING', 140, 30, C.paper, 8, 'center');
+  txt('AND PROCESSING', 140, 41, C.paper, 8, 'center');
+  const jx = JX, jw = 80, jh = 64, jy = gy - jh;   // JRSOI building
+  ctx.fillStyle = '#b59b6b'; ctx.fillRect(jx, jy, jw, jh);
+  ctx.fillStyle = '#8c7448'; ctx.fillRect(jx - 4, jy - 4, jw + 8, 6);
+  ctx.fillStyle = '#3a3020'; ctx.fillRect(jx + 8, jy + 22, 12, 9); ctx.fillRect(jx + jw - 20, jy + 22, 12, 9);
+  ctx.fillStyle = '#4a3b22'; ctx.fillRect(jx + jw / 2 - 7, gy - 20, 14, 20);
+  for (let k = 0; k < 3; k++) {
+    ctx.fillStyle = '#9c8656'; ctx.fillRect(jx - 12 + k * 8, gy - 7, 8, 7); ctx.fillRect(jx + jw - 12 + k * 8, gy - 7, 8, 7);
+    ctx.fillStyle = '#c9b27c'; ctx.fillRect(jx - 11 + k * 8, gy - 6, 6, 5); ctx.fillRect(jx + jw - 11 + k * 8, gy - 6, 6, 5);
+  }
+  ctx.fillStyle = C.gold; ctx.fillRect(jx + 17, jy + 3, 46, 14);
+  ctx.fillStyle = C.navy; ctx.fillRect(jx + 18, jy + 4, 44, 12);
+  txt('JRSOI', jx + 40, jy + 6, C.gold, 8, 'center');
+  ctx.fillStyle = '#d9d9d9'; ctx.fillRect(jx + jw - 6, jy - 24, 1, 20);
+  ctx.fillStyle = C.red; ctx.fillRect(jx + jw - 5, jy - 24, 10, 6);
+  // supply sergeant at the JRSOI exit holding out a machine gun
+  const nx = JX + 90;
+  spr(P_STAND, NPC_PAL, nx, gy - 14, true);
+  if (!L.upgraded) {
+    drawMG(nx - 13, gy - 8, -1);
+    if (frameN % 40 < 28) txt('TAKE THIS!', nx + 5, gy - 28, C.gold, 8, 'center');
+  } else if (frameN - L.handF < 120) txt('GOOD HUNTING!', nx + 5, gy - 28, C.green, 8, 'center');
+}
+
+function drawBG(scroll, theme) {
+  if (theme) { drawThemeBG(scroll, theme); return; }
+  ctx.fillStyle = C.navy; ctx.fillRect(0, 0, W, H);
+  const bands = ['#052a6c', '#0b337a', '#123c86', '#1a4591'];
+  for (let i = 0; i < 4; i++) { ctx.fillStyle = bands[i]; ctx.fillRect(0, 64 + i * 14, W, 14); }
+  ctx.fillStyle = '#1f4b97'; ctx.fillRect(0, 120, W, 60);
+  for (let i = 0; i < 40; i++) {
+    const sx = (((i * 73 - scroll * 0.05) % W) + W) % W, sy = (i * 37) % 62;
+    ctx.fillStyle = i % 7 === 0 ? C.gold : '#9fb4dc'; ctx.fillRect(Math.floor(sx), sy, 1, 1);
+  }
+  // Washington skyline
+  const off = -((scroll * 0.2) % 160);
+  ctx.fillStyle = '#163a78';
+  for (let k = -1; k < 4; k++) {
+    const bx = Math.floor(off + k * 160);
+    ctx.fillRect(bx, 120, 30, 60); ctx.fillRect(bx + 34, 110, 22, 70); ctx.fillRect(bx + 60, 126, 40, 54);
+    ctx.fillRect(bx + 110, 84, 6, 96); ctx.fillRect(bx + 111, 80, 4, 4); ctx.fillRect(bx + 112, 78, 2, 2);
+    ctx.fillRect(bx + 124, 118, 32, 62); ctx.fillRect(bx + 128, 110, 24, 8); ctx.fillRect(bx + 132, 104, 16, 6);
+    ctx.fillRect(bx + 137, 98, 6, 6); ctx.fillRect(bx + 139, 93, 2, 5);
+  }
+  const off2 = -((scroll * 0.45) % 64);
+  ctx.fillStyle = '#28539f';
+  for (let k = -1; k < 7; k++) {
+    const hx = Math.floor(off2 + k * 64);
+    ctx.fillRect(hx, 142, 64, 40); ctx.fillRect(hx + 8, 136, 48, 6); ctx.fillRect(hx + 18, 132, 28, 4);
+  }
+}
+
+const TILE_TH = {
+  home:   { dirt:'#5b4327', speck:'#47341e', top:'#4f8a2b', hi:'#76b941', blade:'#3d6d20' },
+  jungle: { dirt:'#3e2a16', speck:'#2c1d0e', top:'#2f8a2f', hi:'#59c23a', blade:'#1d5e1d', pb:'#8a5a2b', ph:'#b07a40', pl:'#5c3a18' },
+  arctic: { dirt:'#8fc1e3', speck:'#6fa8d3', top:'#ffffff', hi:'#ffffff', blade:'#cfe6f5', pb:'#cfeaf9', ph:'#ffffff', pl:'#8fc1e3' },
+  forest: { dirt:'#4a3520', speck:'#35251a', top:'#3b6e2a', hi:'#5c9a3a', blade:'#284d1c', pb:'#6b4423', ph:'#8a5a33', pl:'#4a2e17' }
+};
+function drawTile(v, c, r) {
+  const x = c * T, y = r * T, hh = r === ROWS - 1 ? T + 4 : T;
+  const th = TILE_TH[L.theme] || TILE_TH.home;
+  if (v === 1) {
+    ctx.fillStyle = th.dirt; ctx.fillRect(x, y, T, hh);
+    ctx.fillStyle = th.speck;
+    if ((c * 7 + r * 3) % 4 === 0) ctx.fillRect(x + 3, y + 7, 2, 2);
+    if ((c * 5 + r * 11) % 3 === 0) ctx.fillRect(x + 10, y + 11, 2, 2);
+    if (r === 0 || L.g[r - 1][c] !== 1) {
+      ctx.fillStyle = th.top; ctx.fillRect(x, y, T, 4);
+      ctx.fillStyle = th.hi; ctx.fillRect(x, y, T, 1);
+      ctx.fillStyle = th.blade; ctx.fillRect(x + ((c * 5) % 12), y + 4, 2, 1);
+    }
+  } else if (v === 2 && L.theme) { // crate / ice block / log
+    ctx.fillStyle = th.pb; ctx.fillRect(x, y, T, T);
+    ctx.fillStyle = th.ph; ctx.fillRect(x, y, T, 1);
+    ctx.fillStyle = th.pl; ctx.fillRect(x, y + 7, T, 1); ctx.fillRect(x, y + 15, T, 1); ctx.fillRect(x + 15, y, 1, T); ctx.fillRect(x + 4, y + 1, 1, 6); ctx.fillRect(x + 10, y + 8, 1, 7);
+  } else if (v === 2) { // filing cabinet
+    ctx.fillStyle = '#8a8f9e'; ctx.fillRect(x, y, T, T);
+    ctx.fillStyle = '#b5b9c6'; ctx.fillRect(x, y, T, 1);
+    ctx.fillStyle = '#5d6170'; ctx.fillRect(x, y + 7, T, 1); ctx.fillRect(x, y + 15, T, 1); ctx.fillRect(x + 15, y, 1, T);
+    ctx.fillStyle = '#2d303a'; ctx.fillRect(x + 6, y + 3, 4, 1); ctx.fillRect(x + 6, y + 11, 4, 1);
+  } else if (v === 3) { // red tape spikes
+    for (let i = 0; i < 4; i++) {
+      const sx = x + i * 4;
+      ctx.fillStyle = C.red; ctx.fillRect(sx + 1, y + 8, 2, 8); ctx.fillRect(sx, y + 12, 4, 4);
+      ctx.fillStyle = C.paper; ctx.fillRect(sx + 1, y + 13, 2, 1);
+    }
+  }
+}
+
+function drawFlag(x, gy, final) {
+  ctx.fillStyle = '#d9d9d9'; ctx.fillRect(x, gy - 48, 2, 48);
+  ctx.fillStyle = C.gold; ctx.fillRect(x - 1, gy - 50, 4, 3);
+  if (final && L.mob) {   // ending flag two: redeployment
+    ctx.fillStyle = '#4b5320'; ctx.fillRect(x + 2, gy - 46, 24, 15);
+    ctx.fillStyle = C.gold; ctx.fillRect(x + 12, gy - 42, 3, 3); ctx.fillRect(x + 11, gy - 41, 5, 1); ctx.fillRect(x + 13, gy - 43, 1, 5);
+    txt('REDEPLOYMENT', x - 46, gy - 62, C.gold);
+  } else if (final) {
+    ctx.fillStyle = C.red; ctx.fillRect(x + 2, gy - 46, 24, 15);
+    ctx.fillStyle = C.paper; ctx.fillRect(x + 2, gy - 42, 24, 2); ctx.fillRect(x + 2, gy - 37, 24, 2);
+    ctx.fillStyle = C.navy; ctx.fillRect(x + 2, gy - 46, 10, 8);
+    ctx.fillStyle = C.paper; ctx.fillRect(x + 6, gy - 43, 2, 2);
+    txt('END OF YEAR', x - 30, gy - 62, C.gold);
+  } else {
+    ctx.fillStyle = checkHit ? C.green : C.steel; ctx.fillRect(x + 2, gy - 46, 14, 9);
+  }
+}
+
+function drawItem(it) {
+  const x = Math.round(it.x), y = Math.round(it.y + Math.sin((frameN + it.x) * 0.08) * 2);
+  switch (it.t) {
+    case 'drill':
+      ctx.fillStyle = '#1f6e2a'; ctx.fillRect(x, y, 12, 12);
+      ctx.fillStyle = C.green; ctx.fillRect(x + 1, y + 1, 10, 10);
+      ctx.fillStyle = C.paper;
+      for (let k = 0; k < 2; k++) for (let i = 0; i < 4; i++) {
+        ctx.fillRect(x + 2 + i, y + 2 + i + k * 4, 1, 2); ctx.fillRect(x + 9 - i, y + 2 + i + k * 4, 1, 2);
+      }
+      break;
+    case 'pay':
+      ctx.fillStyle = '#b8860b'; ctx.fillRect(x + 2, y, 8, 12); ctx.fillRect(x, y + 2, 12, 8);
+      ctx.fillStyle = C.gold; ctx.fillRect(x + 2, y + 1, 8, 10); ctx.fillRect(x + 1, y + 2, 10, 8);
+      ctx.fillStyle = '#8a5d00';
+      ctx.fillRect(x + 4, y + 3, 4, 1); ctx.fillRect(x + 4, y + 4, 1, 2); ctx.fillRect(x + 4, y + 6, 4, 1);
+      ctx.fillRect(x + 7, y + 7, 1, 2); ctx.fillRect(x + 4, y + 9, 4, 1); ctx.fillRect(x + 6, y + 2, 1, 9);
+      break;
+    case 'at': spr(STAR, { Y: C.gold }, x, y, false); break;
+    case 'shield':
+      ctx.fillStyle = C.paper; ctx.fillRect(x + 1, y, 10, 7); ctx.fillRect(x + 2, y + 7, 8, 2); ctx.fillRect(x + 4, y + 9, 4, 2); ctx.fillRect(x + 5, y + 11, 2, 1);
+      ctx.fillStyle = '#2b6be0'; ctx.fillRect(x + 2, y + 1, 8, 6); ctx.fillRect(x + 3, y + 7, 6, 2); ctx.fillRect(x + 5, y + 9, 2, 1);
+      ctx.fillStyle = C.paper; ctx.fillRect(x + 4, y + 2, 1, 4); ctx.fillRect(x + 7, y + 2, 1, 4); ctx.fillRect(x + 5, y + 6, 2, 1);
+      break;
+    case 'heart': spr(HEART, { R: C.red }, x - 1, y, false, 2); break;
+    case 'prime': {   // floating heart with a TRICARE PRIME label
+      spr(HEART, { R: C.red }, x + 5, y + 8, false, 3);
+      ctx.fillStyle = C.paper; ctx.fillRect(x + 14, y + 11, 2, 7); ctx.fillRect(x + 11, y + 13, 8, 2);
+      const on = frameN % 30 < 20;
+      txt('TRICARE', x + 15, y - 12, on ? C.paper : C.steel, 8, 'center');
+      txt('PRIME', x + 15, y - 2, on ? C.gold : C.paper, 8, 'center');
+      break;
+    }
+    case 'trs': {   // big red heart with TRS in white
+      spr(HEART, { R: C.red }, x, y, false, 3);
+      ctx.fillStyle = C.paper;
+      const G3 = { T: ['111', '010', '010', '010', '010'], R: ['110', '101', '110', '101', '101'], S: ['011', '100', '010', '001', '110'] };
+      ['T', 'R', 'S'].forEach((ch, k) => G3[ch].forEach((row, ry) => {
+        for (let rx = 0; rx < 3; rx++) if (row[rx] === '1') ctx.fillRect(x + 5 + k * 4 + rx, y + 4 + ry, 1, 1);
+      }));
+      break;
+    }
+  }
+}
+
+function drawFoe(t, x, y, dir, flash, tm) {
+  x = Math.round(x); y = Math.round(y);
+  if (t === 'unpaid') { drawUnpaid(x, y, dir, flash, tm); return; }
+  if (flash > 0 && flash % 2) {
+    ctx.fillStyle = '#fff';
+    if (t === 'boss') ctx.fillRect(x, y + 4, 32, 44); else ctx.fillRect(x, y, 14, t === 'ppt' ? 16 : t === 'email' ? 10 : 14);
+    return;
+  }
+  if (t === 'boss') { drawBoss(x, y, dir, tm); return; }
+  if (t === 'dfas') {   // tan government envelope with a red DFAS stamp and teeth
+    ctx.fillStyle = '#8a7440'; ctx.fillRect(x, y, 16, 11);
+    ctx.fillStyle = '#d9c38a'; ctx.fillRect(x + 1, y + 1, 14, 9);
+    ctx.fillStyle = '#b39a5c';
+    for (let i = 0; i < 7; i++) { ctx.fillRect(x + 1 + i, y + 1 + Math.floor(i * 0.6), 1, 1); ctx.fillRect(x + 14 - i, y + 1 + Math.floor(i * 0.6), 1, 1); }
+    ctx.fillStyle = C.red;
+    const G = { D: ['110', '101', '101', '110'], F: ['111', '110', '100', '100'], A: ['010', '101', '111', '101'], S: ['011', '110', '011', '110'] };
+    ['D', 'F', 'A', 'S'].forEach((ch, k) => G[ch].forEach((row, ry) => {
+      for (let rx = 0; rx < 3; rx++) if (row[rx] === '1') ctx.fillRect(x + 1 + k * 4 + rx, y + 5 + ry, 1, 1);
+    }));
+    ctx.fillStyle = '#fff';
+    const bite = Math.floor(tm / 8) % 2;
+    for (let i = 0; i < 4; i++) ctx.fillRect(x + 3 + i * 3, y + 11, 2, bite ? 2 : 1);
+    return;
+  }
+  if (t === 'tape') spr(TAPE, TAPE_PAL, x, y, dir > 0);
+  else if (t === 'email') {
+    const flap = Math.floor(tm / 6) % 2;
+    ctx.fillStyle = '#c9d3e6'; ctx.fillRect(x - 3, y + (flap ? 1 : 4), 3, 2); ctx.fillRect(x + 14, y + (flap ? 1 : 4), 3, 2);
+    ctx.fillStyle = C.paper; ctx.fillRect(x, y, 14, 10);
+    ctx.fillStyle = '#8a94aa';
+    ctx.fillRect(x, y, 14, 1); ctx.fillRect(x, y + 9, 14, 1); ctx.fillRect(x, y, 1, 10); ctx.fillRect(x + 13, y, 1, 10);
+    for (let i = 0; i < 7; i++) { const yy = y + 1 + Math.floor(i * 0.7); ctx.fillRect(x + i, yy, 1, 1); ctx.fillRect(x + 13 - i, yy, 1, 1); }
+    ctx.fillStyle = C.red; ctx.fillRect(x + 10, y - 3, 5, 5);
+    ctx.fillStyle = C.paper; ctx.fillRect(x + 12, y - 2, 1, 2); ctx.fillRect(x + 12, y + 1, 1, 1);
+  } else if (t === 'dts') {
+    ctx.fillStyle = '#6b7080'; ctx.fillRect(x, y, 14, 11);
+    ctx.fillStyle = '#1d5fd1'; ctx.fillRect(x + 2, y + 2, 10, 7);
+    ctx.fillStyle = C.red;
+    for (let i = 0; i < 5; i++) { ctx.fillRect(x + 4 + i, y + 3 + i, 1, 1); ctx.fillRect(x + 8 - i, y + 3 + i, 1, 1); }
+    ctx.fillStyle = '#4a4e5a'; ctx.fillRect(x + 5, y + 11, 4, 2); ctx.fillRect(x + 3, y + 13, 8, 1);
+  } else if (t === 'ppt') {
+    ctx.fillStyle = '#5a3a1a'; ctx.fillRect(x + 2, y + 10, 2, 6); ctx.fillRect(x + 10, y + 10, 2, 6); ctx.fillRect(x + 6, y + 10, 2, 5);
+    ctx.fillStyle = '#e8752a'; ctx.fillRect(x, y, 14, 11);
+    ctx.fillStyle = C.paper; ctx.fillRect(x + 1, y + 1, 12, 9);
+    ctx.fillStyle = C.red; ctx.fillRect(x + 3, y + 5, 2, 4);
+    ctx.fillStyle = C.navy; ctx.fillRect(x + 6, y + 3, 2, 6);
+    ctx.fillStyle = '#3a9a46'; ctx.fillRect(x + 9, y + 6, 2, 3);
+    ctx.fillStyle = '#000'; ctx.fillRect(x + 2, y + 2, 2, 1); ctx.fillRect(x + 10, y + 2, 2, 1);
+  }
+}
+
+function drawBoss(x, y, dir, tm) {
+  // THE REG STACK: binders and paper piled 48px high
+  const layers = [[4, 6, '#7a1522'], [10, 6, 'p'], [16, 6, '#2f5d2a'], [22, 12, 'cover'], [34, 4, 'p'], [38, 5, '#6b4f2a'], [43, 5, 'p']];
+  const jit = [1, -1, 2, 0, -2, 1, 0];
+  layers.forEach((l, i) => {
+    const lx = x + jit[i], ly = y + l[0], lh = l[1];
+    if (l[2] === 'p') {
+      ctx.fillStyle = '#efe8d2'; ctx.fillRect(lx, ly, 32, lh);
+      ctx.fillStyle = '#b9b09a'; for (let k = 1; k < lh; k += 2) ctx.fillRect(lx + 1, ly + k, 30, 1);
+    } else if (l[2] === 'cover') {
+      ctx.fillStyle = C.navy; ctx.fillRect(lx, ly, 32, lh);
+      ctx.fillStyle = C.gold; ctx.fillRect(lx, ly, 32, 1); ctx.fillRect(lx, ly + lh - 1, 32, 1);
+      ctx.font = '8px ' + FONT; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillText('REGS', lx, ly + 2);
+    } else {
+      ctx.fillStyle = l[2]; ctx.fillRect(lx, ly, 32, lh);
+      ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.fillRect(lx + 3, ly + 1, 2, lh - 2); ctx.fillRect(lx + 27, ly + 1, 2, lh - 2);
+    }
+  });
+  for (let k = 0; k < 3; k++) {   // loose pages fluttering on top
+    const px = x + 3 + k * 9, py = y + (Math.floor((tm + k * 10) / 8) % 2);
+    ctx.fillStyle = '#fff'; ctx.fillRect(px, py, 8, 5);
+    ctx.fillStyle = '#bbb'; ctx.fillRect(px + 1, py + 2, 6, 1);
+  }
+  const pd = dir > 0 ? 3 : 0;   // angry eyes that track the player
+  ctx.fillStyle = '#fff'; ctx.fillRect(x + 7, y + 11, 6, 5); ctx.fillRect(x + 19, y + 11, 6, 5);
+  ctx.fillStyle = '#000'; ctx.fillRect(x + 8 + pd, y + 13, 2, 2); ctx.fillRect(x + 20 + pd, y + 13, 2, 2);
+  ctx.fillRect(x + 7, y + 9, 2, 1); ctx.fillRect(x + 9, y + 10, 2, 1); ctx.fillRect(x + 11, y + 11, 2, 1);
+  ctx.fillRect(x + 23, y + 9, 2, 1); ctx.fillRect(x + 21, y + 10, 2, 1); ctx.fillRect(x + 19, y + 11, 2, 1);
+}
+
+function drawTarget(tg) {
+  const x = Math.round(tg.x), y = Math.round(tg.y);
+  if (tg.flash > 0 && tg.flash % 2) { ctx.fillStyle = '#fff'; ctx.fillRect(x, y, tg.w, tg.h); return; }
+  if (tg.t === 'law') {   // navy shield with gold scales of justice
+    txt('ROA LAW', x + 8, y - 22, C.gold, 8, 'center');
+    txt('CENTER!', x + 8, y - 12, frameN % 24 < 16 ? C.paper : C.gold, 8, 'center');
+    ctx.fillStyle = C.gold; ctx.fillRect(x - 1, y - 1, 18, 15); ctx.fillRect(x + 1, y + 14, 14, 2); ctx.fillRect(x + 4, y + 16, 8, 2); ctx.fillRect(x + 7, y + 18, 2, 1);
+    ctx.fillStyle = C.navy; ctx.fillRect(x, y, 16, 14); ctx.fillRect(x + 2, y + 14, 12, 2); ctx.fillRect(x + 5, y + 16, 6, 1);
+    ctx.fillStyle = C.gold;
+    ctx.fillRect(x + 7, y + 2, 2, 10); ctx.fillRect(x + 3, y + 3, 10, 1); ctx.fillRect(x + 5, y + 12, 6, 1);
+    ctx.fillRect(x + 2, y + 6, 4, 1); ctx.fillRect(x + 3, y + 4, 1, 2); ctx.fillRect(x + 10, y + 6, 4, 1); ctx.fillRect(x + 12, y + 4, 1, 2);
+    return;
+  }
+  if (tg.t === 'premob') {
+    // label (one or two lines) above a little station badge
+    const lx = x + 7;
+    if (tg.l2) { txt(tg.l1, lx, y - 22, C.paper, 8, 'center'); txt(tg.l2, lx, y - 12, C.gold, 8, 'center'); }
+    else txt(tg.l1, lx, y - 12, C.gold, 8, 'center');
+    ctx.fillStyle = C.gold; ctx.fillRect(x - 1, y - 1, 16, 16);
+    ctx.fillStyle = C.navy; ctx.fillRect(x, y, 14, 14);
+    ctx.fillStyle = C.paper;
+    if (tg.ico === 'syringe') { ctx.fillRect(x + 3, y + 6, 7, 3); ctx.fillRect(x + 10, y + 7, 3, 1); ctx.fillRect(x + 1, y + 5, 2, 5); ctx.fillStyle = C.red; ctx.fillRect(x + 4, y + 7, 4, 1); }
+    else if (tg.ico === 'will') { ctx.fillRect(x + 3, y + 2, 8, 10); ctx.fillStyle = '#8a8f9e'; ctx.fillRect(x + 4, y + 4, 6, 1); ctx.fillRect(x + 4, y + 6, 6, 1); ctx.fillStyle = C.navy; ctx.fillRect(x + 5, y + 9, 5, 1); ctx.fillRect(x + 4, y + 10, 2, 1); }
+    else if (tg.ico === 'book') { ctx.fillStyle = C.red; ctx.fillRect(x + 2, y + 3, 10, 8); ctx.fillStyle = C.paper; ctx.fillRect(x + 6, y + 3, 2, 8); ctx.fillRect(x + 3, y + 5, 2, 1); ctx.fillRect(x + 9, y + 5, 2, 1); }
+    else if (tg.ico === 'pay') { ctx.fillStyle = C.gold; ctx.fillRect(x + 6, y + 2, 2, 10); ctx.fillRect(x + 4, y + 3, 6, 2); ctx.fillRect(x + 4, y + 6, 6, 2); ctx.fillRect(x + 4, y + 9, 6, 2); ctx.fillRect(x + 4, y + 5, 2, 1); ctx.fillRect(x + 8, y + 8, 2, 1); }
+    else if (tg.ico === 'card') { ctx.fillRect(x + 2, y + 3, 10, 8); ctx.fillStyle = '#2b6be0'; ctx.fillRect(x + 2, y + 3, 10, 2); ctx.fillStyle = '#e0ac69'; ctx.fillRect(x + 3, y + 6, 3, 4); ctx.fillStyle = '#8a8f9e'; ctx.fillRect(x + 7, y + 7, 4, 1); ctx.fillRect(x + 7, y + 9, 3, 1); }
+    else { ctx.fillStyle = '#4b5320'; ctx.fillRect(x + 3, y + 4, 8, 4); ctx.fillRect(x + 2, y + 7, 10, 2); ctx.fillStyle = '#33391a'; ctx.fillRect(x + 4, y + 9, 1, 2); ctx.fillRect(x + 9, y + 9, 1, 2); }
+    return;
+  }
+  if (tg.t === 'cont') {
+    // parachute + cash bundle
+    const cx = x + 13;
+    ctx.fillStyle = C.paper; ctx.fillRect(cx - 12, y - 20, 24, 3); ctx.fillRect(cx - 10, y - 22, 20, 2); ctx.fillRect(cx - 6, y - 24, 12, 2);
+    ctx.fillStyle = C.red; ctx.fillRect(cx - 4, y - 20, 8, 3);
+    ctx.fillStyle = '#cfcfcf';
+    for (let i = 0; i < 6; i++) { ctx.fillRect(cx - 11 + i * 2, y - 17 + i * 3, 1, 3); ctx.fillRect(cx + 10 - i * 2, y - 17 + i * 3, 1, 3); }
+    ctx.fillStyle = '#1f6e2a'; ctx.fillRect(x, y, 26, 14);
+    ctx.fillStyle = C.green; ctx.fillRect(x + 1, y + 1, 24, 12);
+    ctx.fillStyle = C.gold; ctx.fillRect(x + 2, y + 2, 4, 10); ctx.fillRect(x + 20, y + 2, 4, 10);
+    ctx.fillStyle = '#0d3a14'; ctx.fillRect(x + 11, y + 4, 4, 1); ctx.fillRect(x + 11, y + 6, 4, 1); ctx.fillRect(x + 11, y + 8, 4, 1); ctx.fillRect(x + 12, y + 3, 1, 7);
+    txt('CONT PAY!', cx, y - 36, frameN % 20 < 12 ? C.gold : C.paper, 8, 'center');
+    txt('$' + fmt(tg.amt), cx, y + 17, C.green, 8, 'center');
+    return;
+  }
+  if (tg.t === 'tamp') {
+    ctx.fillStyle = '#1f6e2a'; ctx.fillRect(x, y, 24, 14);
+    ctx.fillStyle = C.green; ctx.fillRect(x + 1, y + 1, 22, 12);
+    ctx.fillStyle = C.gold; ctx.fillRect(x + 2, y + 2, 4, 10); ctx.fillRect(x + 18, y + 2, 4, 10);
+    ctx.fillStyle = '#0d3a14'; ctx.fillRect(x + 10, y + 4, 4, 1); ctx.fillRect(x + 10, y + 6, 4, 1); ctx.fillRect(x + 10, y + 8, 4, 1); ctx.fillRect(x + 11, y + 3, 1, 7);
+    txt('TAMP', x + 12, y - 12, frameN % 20 < 12 ? C.gold : C.paper, 8, 'center');
+    return;
+  }
+  if (tg.t === 'car') {
+    if (frameN % 30 < 20) txt('IDT TRAVEL', x + 9 - 40, y - 22, '#FFE600');
+    ctx.fillStyle = '#F2C230'; ctx.fillRect(x, y + 3, 18, 5); ctx.fillRect(x + 4, y, 9, 4);
+    ctx.fillStyle = '#9fd3ff'; ctx.fillRect(x + 6, y + 1, 5, 2);
+    ctx.fillStyle = '#111'; ctx.fillRect(x + 2, y + 7, 4, 3); ctx.fillRect(x + 12, y + 7, 4, 3);
+    ctx.fillStyle = '#fff'; ctx.fillRect(x + 17, y + 4, 1, 1);
+  } else {   // ADOS: red, white and blue badge
+    ctx.fillStyle = '#fff'; ctx.fillRect(x - 1, y - 1, 18, 18);
+    for (let r = 0; r < 16; r++) { ctx.fillStyle = Math.floor(r / 2) % 2 === 0 ? C.red : C.paper; ctx.fillRect(x, y + r, 16, 1); }
+    ctx.fillStyle = '#1b3f9e'; ctx.fillRect(x, y, 8, 8);
+    ctx.fillStyle = C.paper; ctx.fillRect(x + 2, y + 2, 1, 1); ctx.fillRect(x + 5, y + 2, 1, 1); ctx.fillRect(x + 3, y + 5, 1, 1); ctx.fillRect(x + 6, y + 5, 1, 1);
+    const sp = Math.floor(frameN / 6) % 4, sx = [x - 3, x + 18, x + 18, x - 3][sp], sy = [y - 3, y - 3, y + 18, y + 18][sp];
+    ctx.fillStyle = C.gold; ctx.fillRect(sx, sy, 2, 2);
+    txt('ADOS', x - 8, y - 12, frameN % 20 < 12 ? C.paper : C.red);
+    for (let i = 0; i < 6; i++) { ctx.fillStyle = i < tg.hp ? C.gold : '#3a4a6a'; ctx.fillRect(x - 4 + i * 4, y + 19, 3, 2); }
+  }
+}
+
+function drawCobol(e) {
+  const x = Math.round(e.x), y = Math.round(e.y), tm = e.tm;
+  if (e.flash > 0 && e.flash % 2) { ctx.fillStyle = '#fff'; ctx.fillRect(x, y, 48, 56); return; }
+  txt('COBOL JuNk', x + 24, y - 24, '#7CFC7C', 8, 'center');
+  txt('PaY SyStEm', x + 24, y - 13, C.gold, 8, 'center');
+  ctx.fillStyle = '#5d6168'; ctx.fillRect(x, y, 48, 56);
+  ctx.fillStyle = '#9aa0a8'; ctx.fillRect(x + 1, y + 1, 46, 54);
+  ctx.fillStyle = '#c3c8cf'; ctx.fillRect(x + 1, y + 1, 46, 2);
+  ctx.fillStyle = '#6e737b'; ctx.fillRect(x + 23, y + 3, 2, 26);
+  [[x + 12, y + 15], [x + 36, y + 15]].forEach(([cx, cy], k) => {
+    ctx.fillStyle = '#2b2b2b'; ctx.fillRect(cx - 9, cy - 9, 18, 18);
+    ctx.fillStyle = '#4a3a28'; ctx.fillRect(cx - 8, cy - 6, 16, 12); ctx.fillRect(cx - 6, cy - 8, 12, 16);
+    ctx.fillStyle = '#d8d8d8'; ctx.fillRect(cx - 2, cy - 2, 4, 4);
+    const a = tm * 0.15 + k;
+    for (let s2 = 0; s2 < 3; s2++) {
+      const ang = a + s2 * 2.094;
+      ctx.fillRect(Math.round(cx + Math.cos(ang) * 5) - 1, Math.round(cy + Math.sin(ang) * 5) - 1, 2, 2);
+    }
+  });
+  ctx.fillStyle = '#1a1a1a'; ctx.fillRect(x + 4, y + 30, 40, 10);
+  const pd = e.dir > 0 ? 2 : 0;
+  ctx.fillStyle = C.red; ctx.fillRect(x + 9 + pd, y + 33, 6, 4); ctx.fillRect(x + 33 + pd, y + 33, 6, 4);
+  ctx.fillStyle = '#000'; ctx.fillRect(x + 7, y + 31, 9, 1); ctx.fillRect(x + 32, y + 31, 9, 1);
+  for (let i = 0; i < 8; i++) {
+    const on = ((tm >> 3) + i * 3) % 5 < 2;
+    ctx.fillStyle = on ? ['#ff4040', '#ffd040', '#40ff60'][i % 3] : '#444';
+    ctx.fillRect(x + 5 + i * 5, y + 43, 3, 2);
+  }
+  ctx.fillStyle = '#222'; ctx.fillRect(x + 8, y + 48, 32, 3);
+  ctx.fillStyle = '#efe0b0'; ctx.fillRect(x + 12 + ((tm >> 2) % 4), y + 46, 10, 3);
+}
+
+function drawUnpaid(x, y, dir, flash, tm) {
+  // a giant walking clipboard of unpaid tasks
+  txt('UNPAID UNIT TASKS', x + 18, y - 24, C.red, 8, 'center');
+  txt('AND TRAINING!', x + 18, y - 14, frameN % 30 < 20 ? C.gold : C.paper, 8, 'center');
+  if (flash > 0 && flash % 2) { ctx.fillStyle = '#fff'; ctx.fillRect(x, y, 36, 40); return; }
+  const step = Math.floor(tm / 10) % 2;
+  ctx.fillStyle = '#2b2b2b'; ctx.fillRect(x + 8, y + 34, 4, step ? 6 : 5); ctx.fillRect(x + 24, y + 34, 4, step ? 5 : 6);
+  ctx.fillStyle = '#7a4f24'; ctx.fillRect(x, y + 2, 36, 33);
+  ctx.fillStyle = '#9aa0a8'; ctx.fillRect(x + 11, y, 14, 6); ctx.fillStyle = '#5d6170'; ctx.fillRect(x + 15, y + 1, 6, 2);
+  ctx.fillStyle = C.paper; ctx.fillRect(x + 3, y + 6, 30, 27);
+  for (let r = 0; r < 5; r++) {
+    const ry = y + 9 + r * 5;
+    ctx.fillStyle = '#8a8f9e'; ctx.fillRect(x + 6, ry, 4, 4); ctx.fillStyle = C.paper; ctx.fillRect(x + 7, ry + 1, 2, 2);
+    ctx.fillStyle = C.red; ctx.fillRect(x + 6, ry, 1, 1); ctx.fillRect(x + 9, ry, 1, 1); ctx.fillRect(x + 7, ry + 1, 2, 2); ctx.fillRect(x + 6, ry + 3, 1, 1); ctx.fillRect(x + 9, ry + 3, 1, 1);
+    ctx.fillStyle = '#b5b9c6'; ctx.fillRect(x + 12, ry + 1, 18 - (r % 3) * 4, 2);
+  }
+  const ed = dir > 0 ? 2 : 0;
+  ctx.fillStyle = '#fff'; ctx.fillRect(x + 13, y + 2, 4, 4); ctx.fillRect(x + 21, y + 2, 4, 4);
+  ctx.fillStyle = '#000'; ctx.fillRect(x + 13 + ed, y + 3, 2, 2); ctx.fillRect(x + 21 + ed, y + 3, 2, 2);
+  ctx.fillRect(x + 12, y + 1, 3, 1); ctx.fillRect(x + 23, y + 1, 3, 1);
+}
+function drawLogo(top) {
+  // WEEKENDWARRIOR(c): one word, both W's oversized, letters sitting on one baseline
+  const parts = [['W', 24], ['EEKEND', 16], ['W', 24], ['ARRIOR', 16], ['\u00A9', 8]];
+  let total = 0;
+  parts.forEach(([t, sz]) => { ctx.font = sz + 'px ' + FONT; total += ctx.measureText(t).width; });
+  let x = Math.round((W - total) / 2);
+  const base = top + 24;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  parts.forEach(([t, sz]) => {
+    ctx.font = sz + 'px ' + FONT;
+    const y = sz === 8 ? base - 16 : base;   // the (c) rides high, like a superscript
+    ctx.fillStyle = '#000'; ctx.fillText(t, x + (sz > 16 ? 2 : 1), y + (sz > 16 ? 2 : 1));
+    ctx.fillStyle = sz > 16 ? C.paper : C.gold; ctx.fillText(t, x, y);
+    x += ctx.measureText(t).width;
+  });
+}
+function drawCommissary(x, gy) {
+  const w = 96, h = 60, y = gy - h;
+  ctx.fillStyle = '#d8d2c0'; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = '#b8b09a'; ctx.fillRect(x, y + h - 4, w, 4);
+  ctx.fillStyle = C.navy; ctx.fillRect(x - 3, y - 4, w + 6, 26);
+  ctx.fillStyle = C.gold; ctx.fillRect(x - 3, y - 4, w + 6, 1); ctx.fillRect(x - 3, y + 21, w + 6, 1);
+  txt('COMMISSARY', x + w / 2, y - 1, C.gold, 8, 'center');
+  txt('EXCHANGE', x + w / 2, y + 10, C.paper, 8, 'center');
+  for (let i = 0; i < 12; i++) { ctx.fillStyle = i % 2 ? C.paper : C.red; ctx.fillRect(x - 3 + i * 8.5, y + 22, 8.5, 5); }   // awning
+  ctx.fillStyle = '#7fb8e0'; ctx.fillRect(x + 6, y + 32, 24, 16); ctx.fillRect(x + 66, y + 32, 24, 16);
+  ctx.fillStyle = '#c9e6f8'; ctx.fillRect(x + 7, y + 33, 6, 2); ctx.fillRect(x + 67, y + 33, 6, 2);
+  // the door
+  const dx = x + 40;
+  ctx.fillStyle = '#4a4a4a'; ctx.fillRect(dx - 1, y + 29, 18, h - 29);
+  ctx.fillStyle = L.commUsed ? '#5d6170' : '#9fd3ff'; ctx.fillRect(dx, y + 30, 7, h - 34); ctx.fillRect(dx + 9, y + 30, 7, h - 34);
+  if (L.commUsed) { ctx.fillStyle = C.red; ctx.fillRect(dx + 1, y + 38, 14, 6); ctx.fillStyle = C.paper; ctx.fillRect(dx + 3, y + 40, 10, 2); }
+  else if (atDoor) txt(document.body.classList.contains('touch') ? 'TAP UP!' : 'PRESS UP!', dx + 8, y - 16, frameN % 20 < 12 ? C.gold : C.paper, 8, 'center');
+  // shopping cart
+  ctx.fillStyle = '#9aa0a8'; ctx.fillRect(x + 62, gy - 9, 10, 5); ctx.fillRect(x + 72, gy - 11, 1, 3);
+  ctx.fillStyle = '#2b2b2b'; ctx.fillRect(x + 63, gy - 3, 2, 2); ctx.fillRect(x + 69, gy - 3, 2, 2);
+}
+function drawHeli(x, y) {
+  x = Math.round(x); y = Math.round(y);
+  const r = frameN % 6 < 3;
+  ctx.fillStyle = '#2b2b2b'; ctx.fillRect(x - 6, y - 3, 46, 1); ctx.fillRect(x + 16, y - 2, 2, 3);   // main rotor + mast
+  if (r) { ctx.fillStyle = '#7a7a7a'; ctx.fillRect(x + 2, y - 4, 30, 1); }
+  ctx.fillStyle = '#4b5320'; ctx.fillRect(x + 2, y, 26, 10); ctx.fillRect(x + 28, y + 3, 16, 3);       // body + tail boom
+  ctx.fillStyle = '#5c6630'; ctx.fillRect(x + 2, y, 26, 2);
+  ctx.fillStyle = '#9fd3ff'; ctx.fillRect(x + 3, y + 2, 7, 4);                                          // cockpit
+  ctx.fillStyle = '#2b2b2b'; ctx.fillRect(x + 42, y + (r ? 0 : 2), 2, 7);                               // tail rotor
+  ctx.fillRect(x + 4, y + 12, 22, 1); ctx.fillRect(x + 8, y + 10, 1, 2); ctx.fillRect(x + 22, y + 10, 1, 2);   // skids
+  ctx.fillStyle = C.paper; ctx.fillRect(x + 14, y + 4, 2, 2);
+}
+function drawMG(x, y, dir) {   // machine gun with ammo belt
+  x = Math.round(x); y = Math.round(y);
+  const fx = (a, w) => dir > 0 ? x + a : x + 14 - a - w;
+  ctx.fillStyle = '#2b2b2b'; ctx.fillRect(fx(0, 10), y, 10, 3); ctx.fillRect(fx(10, 4), y + 1, 4, 1); ctx.fillRect(fx(1, 2), y + 3, 2, 2);
+  ctx.fillStyle = '#4a4a4a'; ctx.fillRect(fx(2, 6), y, 6, 1);
+  ctx.fillStyle = '#7a6a40'; ctx.fillRect(fx(4, 4), y + 3, 4, 3);
+  ctx.fillStyle = C.gold; ctx.fillRect(fx(4, 1), y + 6, 1, 1); ctx.fillRect(fx(6, 1), y + 6, 1, 1);
+}
+
+function drawPlayer(p) {
+  if (p.inv > 0 && Math.floor(p.inv / 4) % 2 === 0) return;
+  if (p.car > 0) {   // driving the IDT TRAVEL car
+    const fx = p.face < 0, x = Math.round(p.x), y = Math.round(p.y), cx = x - 5;
+    spr(TOP.slice(0, 5), PAL, x, y - 1, fx);
+    const warn = p.car < 90 && frameN % 10 < 5;
+    ctx.fillStyle = warn ? C.red : '#F2C230'; ctx.fillRect(cx, y + 5, 20, 6); ctx.fillRect(cx + 3, y + 3, 14, 2);
+    ctx.fillStyle = '#9fd3ff'; ctx.fillRect(fx ? cx + 3 : cx + 14, y + 3, 3, 2);
+    ctx.fillStyle = '#111'; ctx.fillRect(cx + 2, y + 10, 5, 4); ctx.fillRect(cx + 13, y + 10, 5, 4);
+    ctx.fillStyle = '#888'; ctx.fillRect(cx + 4, y + 11, 1, 1); ctx.fillRect(cx + 15, y + 11, 1, 1);
+    ctx.fillStyle = '#fff'; ctx.fillRect(fx ? cx : cx + 19, y + 6, 1, 2);
+    return;
+  }
+  const f = !p.onG ? P_JUMP : (Math.abs(p.vx) > 0.2 ? (Math.floor(p.run / 6) % 2 ? P_RUN1 : P_RUN2) : P_STAND);
+  spr(f, PAL, p.x, p.y, p.face < 0);
+  if (L && L.upgraded && frameN - L.handF >= 16) drawMG(p.face > 0 ? p.x + 3 : p.x - 7, p.y + 5, p.face);
+  if (p.shield > 0 && (p.shield > 90 || frameN % 8 < 4)) {
+    ctx.strokeStyle = 'rgba(132,180,255,.85)'; ctx.lineWidth = 1;
+    ctx.strokeRect(Math.round(p.x) - 3.5, Math.round(p.y) - 3.5, p.w + 7, p.h + 7);
+  }
+}
+
+function drawWorld() {
+  const cx = Math.round(cam);
+  ctx.save(); ctx.translate(-cx, 0);
+  if (L.mob && cx < 560) drawMobBuildings();
+  const c0 = Math.max(0, Math.floor(cx / T)), c1 = Math.min(L.cols - 1, c0 + W / T + 1);
+  if (L.commX && L.commX > cx - 120 && L.commX < cx + W + 20) drawCommissary(L.commX, L.commY * T);
+  for (let c = c0; c <= c1; c++) for (let r = 0; r < ROWS; r++) { const v = L.g[r][c]; if (v) drawTile(v, c, r); }
+  drawFlag(L.checkX, L.checkY * T, false);
+  drawFlag(L.flagX, L.flagY * T, true);
+  for (const it of L.items) if (!it.got && it.x > cx - 20 && it.x < cx + W + 20) drawItem(it);
+  for (const tg of L.targets) if (!tg.got && tg.x > cx - 60 && tg.x < cx + W + 60) drawTarget(tg);
+  if (L.heli && L.heli.st === 'fly') drawHeli(L.heli.x, L.heli.y);
+  for (const e of L.enemies) {
+    if (e.x < cx - 60 || e.x > cx + W + 60) continue;
+    if (e.kind === 'cobol') { drawCobol(e); continue; }
+    if (e.big) { ctx.save(); ctx.translate(Math.round(e.x), Math.round(e.y)); ctx.scale(2, 2); drawFoe(e.t, 0, 0, e.dir, e.flash, e.tm); ctx.restore(); }
+    else drawFoe(e.t, e.x, e.y, e.dir, e.flash, e.tm);
+  }
+  for (const s of shots) {
+    if (s.card) {   // punch card
+      const sx = Math.round(s.x), sy = Math.round(s.y);
+      ctx.fillStyle = '#efe0b0'; ctx.fillRect(sx, sy, 10, 5);
+      ctx.fillStyle = '#7a6a40'; ctx.fillRect(sx + 2, sy + 1, 1, 1); ctx.fillRect(sx + 5, sy + 3, 1, 1); ctx.fillRect(sx + 7, sy + 1, 1, 1); ctx.fillRect(sx + 4, sy + 1, 1, 1);
+      continue;
+    }
+    if (s.reel) {   // spinning tape reel
+      const sx = Math.round(s.x), sy = Math.round(s.y), sp = (frameN >> 2) % 2;
+      ctx.fillStyle = '#2b2b2b'; ctx.fillRect(sx + 1, sy, 7, 9); ctx.fillRect(sx, sy + 1, 9, 7);
+      ctx.fillStyle = '#4a3a28'; ctx.fillRect(sx + 2, sy + 2, 5, 5);
+      ctx.fillStyle = '#d8d8d8'; ctx.fillRect(sx + 4, sy + 4, 1, 1); ctx.fillRect(sp ? sx + 2 : sx + 6, sy + 2, 1, 1); ctx.fillRect(sp ? sx + 6 : sx + 2, sy + 6, 1, 1);
+      continue;
+    }
+    if (s.paper) {
+      ctx.fillStyle = C.paper; ctx.fillRect(Math.round(s.x), Math.round(s.y), 7, 7);
+      ctx.fillStyle = '#8a8f9e'; ctx.fillRect(Math.round(s.x) + 1, Math.round(s.y) + 2, 5, 1); ctx.fillRect(Math.round(s.x) + 1, Math.round(s.y) + 4, 4, 1);
+      continue;
+    }
+    ctx.fillStyle = '#e8752a'; ctx.fillRect(Math.round(s.x), Math.round(s.y), 6, 4);
+    ctx.fillStyle = C.paper; ctx.fillRect(Math.round(s.x) + 1, Math.round(s.y) + 1, 4, 2);
+  }
+  if (L.mob && L.upgraded && frameN - L.handF < 16) {
+    const t = (frameN - L.handF) / 16;
+    const gx0 = JX + 77;
+    drawMG(gx0 + (pl.x + 3 - gx0) * t, (8 * T - 8) + (pl.y + 5 - (8 * T - 8)) * t - Math.sin(t * Math.PI) * 10, 1);
+  }
+  drawPlayer(pl);
+  for (const b of bullets) {
+    ctx.fillStyle = L.upgraded ? C.gold : C.paper; ctx.fillRect(Math.round(b.x), Math.round(b.y), 6, 3);
+    ctx.fillStyle = '#9fb4dc'; ctx.fillRect(Math.round(b.x) + 1, Math.round(b.y) + 1, 4, 1);
+  }
+  const FL = [C.gold, C.red, C.paper, C.steel, C.green, '#ff7ad9'];
+  for (const q of parts) {
+    ctx.fillStyle = q.flash ? FL[(frameN + q.k) % FL.length] : q.col;
+    if (!q.flash || (frameN + q.k) % 6 < 5) ctx.fillRect(Math.round(q.x), Math.round(q.y), q.flash ? 3 : 2, q.flash ? 3 : 2);
+  }
+  for (const q of pops) txt(q.s, q.x, q.y, q.col);
+  ctx.restore();
+}
+
+function drawHUD() {
+  ctx.fillStyle = 'rgba(0,13,38,.75)'; ctx.fillRect(0, 0, W, 13);
+  txt('YR ' + year, 4, 3, C.paper);
+  txt('PTS ' + pts + '/50', 52, 3, pts >= 50 ? C.green : C.paper);
+  txt('$' + fmt(runPay), 136, 3, C.gold);
+  for (let i = 0; i < Math.max(3, hearts); i++) spr(HEART, { R: i < hearts ? C.red : '#3a4a6a' }, 214 + i * 10, 3);
+  const st = [];
+  if (pl.shield > 0) st.push(['USERRA', C.steel]);
+  if (pl.car > 0) st.push(['IDT ' + Math.ceil(pl.car / 60) + 'S', '#FFE600']);
+  if (L.upgraded) st.push(['2X FIRE', C.gold]);
+  if (prog.lawShield) st.push(['ROA LAW', C.gold]);
+  if (st.length) {
+    const tw = st.reduce((a, q) => a + q[0].length * 8 + 8, 0);
+    ctx.fillStyle = 'rgba(0,13,38,.75)'; ctx.fillRect(W - tw - 4, 13, tw + 4, 12);
+    let x = W - tw;
+    st.forEach(q => { txt(q[0], x, 15, q[1]); x += q[0].length * 8 + 8; });
+  }
+  const b = L.boss;
+  if (b && !b.dead && b.x < cam + W + 40) {
+    ctx.fillStyle = 'rgba(0,13,38,.75)'; ctx.fillRect(0, 13, 132, 12);
+    const mx = b.maxHp || 5, pw = mx > 5 ? 4 : 8, gap = mx > 5 ? 5 : 10;
+    txt(b.kind === 'cobol' ? 'PAY SYS' : 'REG STACK', 4, 15, C.red);
+    for (let i = 0; i < mx; i++) { ctx.fillStyle = i < b.hp ? C.red : '#3a4a6a'; ctx.fillRect(80 + i * gap, 16, pw, 6); }
+  }
+}
+
+function drawMenu() {
+  const it = layout();
+  it.forEach((o, i) => {
+    const on = i === sel, dis = o.enabled === false;
+    panel(o.x, o.y, o.w, o.h, on && !dis ? C.red : 'rgba(1,34,94,.95)', on ? C.gold : C.steel);
+    txtC(o.label, o.y + 4, dis ? '#7d89a6' : C.paper);
+    if (on && !dis && frameN % 40 < 26) txt('>', o.x + 5, o.y + 4, C.gold);
+  });
+}
+
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  const inWorld = L && ['play', 'pause', 'intro', 'win', 'bad', 'loss', 'ados', 'mobwin'].includes(state);
+  drawBG(inWorld ? cam : frameN * 0.5, inWorld && L ? L.theme : null);
+  if (inWorld) { drawWorld(); drawHUD(); }
+  if (mobT > 0 && (state === 'play' || state === 'pause')) {   // call-up alert
+    const on = Math.floor(mobT / 8) % 2 === 0;
+    ctx.fillStyle = on ? 'rgba(75,83,32,.96)' : 'rgba(1,34,94,.94)'; ctx.fillRect(0, 0, W, H);
+    txtC('MOBILIZATION!', 56, on ? C.gold : C.paper, 16);
+    txtC('PACK YOUR BAGS!', 82, on ? C.paper : C.gold, 16);
+    txtC("YOU'VE BEEN CALLED UP.", 114, C.paper);
+  }
+  if (inWorld && L.shutT > 0 && (state === 'play' || state === 'pause')) {
+    ctx.fillStyle = 'rgba(90,90,90,.35)'; ctx.fillRect(0, 25, W, H - 25);
+    const on = Math.floor(L.shutT / 15) % 2 === 0;
+    ctx.fillStyle = on ? C.red : '#3a3a3a'; ctx.fillRect(0, 13, W, 12);
+    txtC('GOVERNMENT SHUTDOWN-WORK FOR FREE! ' + Math.ceil(L.shutT / 60), 15, C.paper);
+  }
+  if (dd214T > 0 && (state === 'play' || state === 'pause')) {   // separation papers
+    const on = Math.floor(dd214T / 10) % 2 === 0;
+    ctx.fillStyle = on ? 'rgba(1,34,94,.96)' : 'rgba(31,110,42,.94)'; ctx.fillRect(0, 0, W, H);
+    txtC('GET THAT DD214!', 40, on ? C.gold : C.paper, 16);
+    txtC('NOW YOU HAVE TAMP:', 82, C.paper);
+    txtC('180 DAYS OF', 100, C.green, 16);
+    txtC('TRICARE PRIME!', 122, C.green, 16);
+  }
+  if (shopT > 0 && (state === 'play' || state === 'pause')) {   // tax free shopping!
+    const on = Math.floor(shopT / 8) % 2 === 0;
+    ctx.fillStyle = on ? 'rgba(1,34,94,.95)' : 'rgba(182,29,48,.93)'; ctx.fillRect(0, 0, W, H);
+    txtC('TAX FREE', 46, on ? C.gold : C.paper, 16);
+    txtC('SHOPPING!', 68, on ? C.gold : C.paper, 16);
+    txtC('HEARTS RESTORED', 102, C.green);
+    txtC(L.shopBonus > 0 ? 'YOU SAVED $' + L.shopBonus + '!' : 'SAVINGS FROZEN BY THE SHUTDOWN', 118, C.paper);
+  }
+  if (fundT > 0 && (state === 'play' || state === 'pause')) {   // full-screen funding alert
+    const on = Math.floor(fundT / 6) % 2 === 0;
+    ctx.fillStyle = on ? 'rgba(182,29,48,.94)' : 'rgba(110,0,15,.85)'; ctx.fillRect(0, 0, W, H);
+    txtC('NO IDT TRAVEL', 58, on ? C.paper : C.gold, 16);
+    txtC('FUNDING!!', 82, on ? C.paper : C.gold, 16);
+    txtC('YOUR CAR HAS BEEN RECALLED.', 114, C.paper);
+  }
+
+  if (state === 'title' || state === 'start') {
+    ctx.fillStyle = '#5b4327'; ctx.fillRect(0, 160, W, 20);
+    ctx.fillStyle = '#4f8a2b'; ctx.fillRect(0, 160, W, 4);
+    ctx.fillStyle = '#76b941'; ctx.fillRect(0, 160, W, 1);
+    const rx = (frameN * 1.1) % (W + 40) - 20;
+    spr(Math.floor(frameN / 6) % 2 ? P_RUN1 : P_RUN2, PAL, rx, 146, false);
+    drawLogo(14);
+    txtC("A RESERVIST'S ROAD TO 20", 42, C.paper);
+    pips(60);
+    txtC('GOOD YEARS: ' + prog.years + '/20', 74, C.steel);
+    txtC('\u00A9 2026 RESERVE ORGANIZATION OF AMERICA', 168, C.paper);
+    if (state === 'start') {
+      const on = frameN % 50 < 30;
+      panel(60, 104, 200, 22, on ? C.red : C.navy, C.gold);
+      txtC(document.body.classList.contains('touch') ? 'TAP TO START' : 'CLICK TO START', 111, on ? C.paper : C.gold);
+    }
+  } else if (state === 'howto') {
+    panel(12, 6, 296, 172);
+    txtC('HOW TO PLAY', 12, C.gold);
+    const lines = [
+      ['MOVE   ARROWS OR A/D', C.paper],
+      ['JUMP   SPACE, W OR Z', C.paper],
+      ['FIRE   X OR J (HOLD)', C.paper],
+      ['PAUSE  P     MUTE  M', C.paper],
+      ['PHONE  USE THE PADS', C.paper],
+      ['1 STAGE = 1 YEAR. YOU GET', C.steel],
+      ['15 MEMBERSHIP PTS FREE.', C.steel],
+      ['HIT 50 PTS + REACH THE FLAG', C.steel],
+      ['= GOOD YEAR. 20 = LETTER!', C.steel],
+      ['GREEN = DRILL WEEKEND +4', C.green],
+      ['STAR = ANNUAL TRAINING +15', C.gold],
+      ['HEART = PHA  BLUE = USERRA', C.red]
+    ];
+    lines.forEach((l, i) => txt(l[0], 24, 26 + i * 10 + (i > 4 ? 4 : 0) + (i > 8 ? 4 : 0), l[1]));
+  } else if (state === 'intro') {
+    panel(16, 20, 288, 150);
+    txtC('YEAR ' + year, 28, C.gold, 16);
+    wrapC(YEARS[year - 1], 52, 256, C.paper);
+    const fk = Object.keys(FOES).find(k => FOES[k].year === year);
+    if (fk) {
+      drawFoe(fk, 34, 96, 1, 0, frameN);
+      txt('NEW: ' + FOES[fk].name, 56, 96, C.red);
+      txt(FOES[fk].desc, 56, 108, C.steel);
+    } else if (year === 7) {
+      wrapC("START LOOKING FOR CONTINUATION PAY IF YOU'RE IN BRS!", 94, 256, C.gold);
+    } else {
+      txtC('SAME THREATS. MORE OF THEM.', 100, C.steel);
+    }
+    if (year % 2 === 0) txtC(year % 4 === 0 ? 'BOSS: COBOL JUNK PAY SYSTEM' : 'BOSS AHEAD: THE REG STACK', 120, C.gold);
+    txtC('GET 50 PTS. YOU START WITH 15.', year % 2 === 0 ? 133 : 128, C.green);
+  } else if (state === 'pause') {
+    panel(40, 44, 240, 110);
+    txtC('PAUSED', 54, C.gold, 16);
+  } else if (state === 'win') {
+    stepConfetti(); drawConf();
+    panel(16, 16, 288, 160);
+    txtC('GOOD YEAR!', 26, C.green, 16);
+    if (L.lawSaved) txtC('ROA LAW CENTER BLOCKED DATA LOSS!', 48, C.gold);
+    else txtC('YEAR ' + year + ' COUNTS TOWARD 20', 48, C.paper);
+    txtC('POINTS: ' + pts, 62, C.paper);
+    txtC('DRILL PAY: $' + fmt(runPay), 74, C.gold);
+    pips(90);
+    txtC('GOOD YEARS: ' + prog.years + '/20', 104, C.steel);
+  } else if (state === 'mobwin') {
+    stepConfetti(); drawConf();
+    panel(16, 16, 288, 156);
+    ctx.fillStyle = '#4b5320'; ctx.fillRect(17, 17, 286, 3);
+    txtC('MISSION COMPLETE', 28, C.gold, 16);
+    txtC('MOBILIZED A FULL YEAR', 50, C.paper);
+    txtC('+365 POINTS', 62, C.green);
+    txtC('YEAR ' + year + ' IS A GOOD YEAR', 76, C.paper);
+    pips(92);
+    txtC('GOOD YEARS: ' + prog.years + '/20', 106, C.steel);
+  } else if (state === 'ados') {
+    stepConfetti(); drawConf();
+    panel(16, 16, 288, 156);
+    ctx.fillStyle = C.red; ctx.fillRect(17, 17, 286, 2); ctx.fillStyle = '#1b3f9e'; ctx.fillRect(17, 19, 286, 2);
+    txtC('ADOS ORDERS!', 28, C.gold, 16);
+    txtC('ACTIVE DUTY FOR OPERATIONAL', 50, C.paper);
+    txtC('SUPPORT = A FULL YEAR OF POINTS', 62, C.paper);
+    txtC(year < 20 ? 'YEARS ' + year + ' + ' + (year + 1) + ' CREDITED' : 'YEAR 20 CREDITED', 78, C.green);
+    pips(92);
+    txtC('GOOD YEARS: ' + prog.years + '/20', 106, C.steel);
+  } else if (state === 'loss') {
+    const j = lossT > 0 ? Math.round((Math.random() - 0.5) * 6) : 0;
+    panel(16, 16, 288, 156, 'rgba(30,0,8,.94)', C.red);
+    txt('DATA LOSS!', W / 2 + j, 24, C.red, 16, 'center');
+    txtC('DMDC LOST YOUR POINTS!', 46, C.paper);
+    txtC('YEAR ' + year + ' POINTS: 0', 60, C.steel);
+    txtC('YEARS ' + (year - 1) + ' + ' + year + ' WIPED FROM RECORD', 72, C.gold);
+    pips(88);
+    txtC('GOOD YEARS: ' + prog.years + '/20', 102, C.steel);
+    txtC('FILE A CORRECTION. ROA CAN HELP.', 118, C.paper);
+    if (lossT > 0) {   // screen glitch
+      for (let i = 0; i < 8; i++) {
+        ctx.fillStyle = ['rgba(182,29,48,.6)', 'rgba(240,240,243,.5)', 'rgba(132,156,193,.5)'][i % 3];
+        ctx.fillRect(Math.random() * W, Math.random() * H, 20 + Math.random() * 120, 2 + Math.random() * 6);
+      }
+    }
+  } else if (state === 'bad') {
+    panel(16, 16, 288, 150);
+    txtC('NOT A GOOD YEAR', 26, C.red, 16);
+    if (endReason === 'points') {
+      txtC('ONLY ' + pts + '/50 POINTS AT THE FLAG.', 54, C.paper);
+      txtC('GRAB MORE DRILLS + THE AT STAR.', 68, C.steel);
+    } else {
+      txtC('YOUR READINESS HIT ZERO.', 54, C.paper);
+      txtC('THE RED TAPE WON THIS ROUND.', 68, C.steel);
+    }
+    txtC("BAD YEARS DON'T COUNT.", 90, C.gold);
+    txtC('THE SAME COURSE AWAITS. TRY AGAIN.', 104, C.paper);
+  } else if (state === 'letter') {
+    stepConfetti();
+    panel(20, 8, 280, 130, C.paper, C.navy);
+    ctx.fillStyle = C.red; ctx.fillRect(23, 11, 274, 1); ctx.fillRect(23, 134, 274, 1);
+    ctx.font = '16px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillStyle = C.navy; ctx.fillText('20-YEAR LETTER', W / 2, 16);
+    ctx.font = '8px ' + FONT;
+    ctx.fillText('NOTIFICATION OF ELIGIBILITY', W / 2, 38);
+    ctx.fillText('FOR RETIRED PAY AT AGE 60', W / 2, 50);
+    spr(STAR, { Y: C.gold }, W / 2 - 11, 63, false, 2);
+    ctx.fillStyle = C.red; ctx.fillText('20 GOOD YEARS. MISSION COMPLETE.', W / 2, 92);
+    ctx.fillStyle = C.navy; ctx.fillText('CAREER DRILL PAY: $' + fmt(prog.pay), W / 2, 106);
+    ctx.fillStyle = '#5d6170'; ctx.fillText('*CHECK YOUR REAL POINTS WITH HR', W / 2, 120);
+    drawConf();
+  }
+  drawMenu();
+}
+function drawConf() { for (const q of conf) { ctx.fillStyle = q.col; ctx.fillRect(Math.round(q.x), Math.round(q.y), 2, 3); } }
+
+/* ===================== LOOP ===================== */
+function step() {
+  frameN++;
+  if (resetArm > 0) resetArm--;
+  if (lossT > 0) lossT--;
+  if (state === 'play') stepPlay(); else stepMenu();
+  ev.jump = ev.fire = ev.ok = ev.up = ev.down = ev.enter = false;
+}
+let last = 0, acc = 0;
+const DT = 1000 / 60;
+function loop(t) {
+  requestAnimationFrame(loop);
+  if (!last) last = t;
+  acc += Math.min(250, t - last); last = t;
+  let n = 0;
+  while (acc >= DT && n < 5) { step(); acc -= DT; n++; }
+  if (n === 5) acc = 0;
+  draw();
+}
+requestAnimationFrame(loop);
+
+window.__goodYear = { startYear, step, draw, genLevel, go, get state() { return state; }, get pl() { return pl; }, get pts() { return pts; }, set pts(v) { pts = v; }, get L() { return L; }, get prog() { return prog; }, hold, touch, ev };
+})();
+</script>
+</body>
+</html>
