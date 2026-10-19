@@ -289,7 +289,8 @@ function noise(d, v, fStart, fEnd, delay) {
 const MUSIC_SRC = {
   title: 'fanfare.mp3',     // these three files sit next to index.html
   game:  'operation.mp3',
-  mob:   'mobilization.mp3'
+  mob:   'mobilization.mp3',
+  agr:   'agr.mp3'           // "Run and Gun": plays on loop during Active Guard Reserve levels
 };
 const music = { el: {}, unlocked: false };
 function musicEl(name) {
@@ -304,13 +305,13 @@ function musicEl(name) {
 }
 function wantedTrack() {
   if (['start', 'title', 'howto', 'letter'].includes(state)) return 'title';
-  if (['intro', 'play'].includes(state)) return L && L.mob ? 'mob' : 'game';
+  if (['intro', 'play'].includes(state)) return L && L.agr ? 'agr' : L && L.mob ? 'mob' : 'game';
   return null;   // paused, win, bad and data-loss screens are quiet
 }
 function syncMusic() {
   if (!music.unlocked) return;
   const want = wantedTrack();
-  ['title', 'game', 'mob'].forEach(name => {
+  ['title', 'game', 'mob', 'agr'].forEach(name => {
     const a = musicEl(name);
     if (!a || a._priming || a._broken) return;
     if (name === want) {
@@ -323,7 +324,7 @@ function musicUnlock() {
   if (music.primed) return;
   music.primed = true; music.unlocked = true;
   // iPhones only let audio start from a tap, so silently "prime" every other track during that tap
-  ['game', 'mob'].forEach(name => {
+  ['game', 'mob', 'agr'].forEach(name => {
     const g = musicEl(name);
     if (!g || wantedTrack() === name) return;
     g._priming = true; g.muted = true;
@@ -465,6 +466,8 @@ cv.addEventListener('pointermove', e => {
 let state = 'start', sel = 0, resetArm = 0, frameN = 0;
 let L = null, year = 1, pts = 0, runPay = 0, hearts = 3, pl = null, cam = 0;
 let bullets = [], shots = [], parts = [], pops = [], conf = [], checkHit = false, endReason = '', lossT = 0, fundT = 0, mobT = 0, dd214T = 0, shopT = 0, atDoor = false;
+// AGR (Active Guard Reserve) layer: ladder climb transition, TRICARE PRIME REMOTE visit, end-of-tour flash
+let agrTr = null, remoteT = 0, agrEndT = 0, doorKind = '';
 
 function go(s) { state = s; sel = 0; resetArm = 0; document.body.dataset.state = s; if (s === 'loss') lossT = 70; syncMusic(); }
 function togglePause() { if (state === 'play') go('pause'); else if (state === 'pause') go('play'); }
@@ -499,6 +502,19 @@ function mkEnemy(t, x, gy) {
   if (t === 'ppt') { e.hp = 3; e.y = gy; e.h = 16; e.tm = 30; }
   if (t === 'boss') { e.hp = 5; e.w = 32; e.h = 48; e.y = gy + T - 48; e.homeX = x; e.inv = 0; e.tm = 40; }
   if (t === 'cobol') { e.t = 'boss'; e.kind = 'cobol'; e.hp = 10; e.maxHp = 10; e.w = 48; e.h = 56; e.y = gy + T - 56; e.homeX = x - 16; e.inv = 0; e.tm = 40; }
+  if (t === 'ac') { e.w = 28; e.h = 22; e.y = gy + T - 22; e.hp = 6; e.tm = Math.floor(x) % 100; }   // broken air conditioner
+  return e;
+}
+// AGR swarm flyers: emails, taskers, spreadsheets, slides and broken systems that home in on you
+const AGR_FOES = new Set(['tasker', 'xls', 'slide', 'sys', 'ac', 'drone']);
+function mkDrone(x) {   // HIGHER HQ quadcopter: hovers over you and bombs the field with 5-8 taskers
+  return { t: 'drone', x, y: 44, w: 30, h: 12, vx: 0, vy: 0, dir: -1, hp: 4, tm: 0, flash: 0, dead: false,
+    drops: 5 + Math.floor(Math.random() * 4), dropT: 50, off: 30 + Math.random() * 60, leaving: false };
+}
+function mkFly(t, x, y) {
+  const e = { t, x, y, w: 14, h: t === 'email' ? 10 : t === 'tasker' ? 14 : 12, vx: -0.6, vy: 0, dir: -1,
+    hp: t === 'sys' ? 2 : 1, tm: Math.floor(Math.random() * 60), flash: 0, dead: false, sw: true,
+    sp: 0.75 + Math.random() * 0.55 + year * 0.02, ox: 0, oy: 0, ph: Math.random() * 6 };
   return e;
 }
 function enlarge(e) {   // mobilization enemies are twice the size and one hit tougher
@@ -534,6 +550,10 @@ function genLevel(y, mob) {
     if (!mob && !Lv.commX && c > cols * 0.28) {   // flat stretch with the Commissary/Exchange
       for (let i = 0; i < 8; i++, c++) col(c, h);
       Lv.commX = (c - 7) * T; Lv.commY = h; continue;
+    }
+    if (!mob && !Lv.ladX && c > cols * 0.4) {     // flat stretch with the AGR ladder and its light-up sign
+      for (let i = 0; i < 10; i++, c++) col(c, h);
+      Lv.ladX = (c - 9) * T; Lv.ladY = h; continue;
     }
     if (!cpDone && c > cols * 0.5) {
       for (let i = 0; i < 5; i++, c++) col(c, h);
@@ -587,7 +607,7 @@ function genLevel(y, mob) {
   for (let cc = Math.floor(cols * (mob ? 0.55 : 0.42)); cc < cols - 18; cc++) {
     let top = -1;
     for (let i = 0; i < ROWS; i++) if (g[i][cc] === 1) { top = i; break; }
-    let ok = top > 3;
+    let ok = top > 3 && !(Lv.ladX && Math.abs(cc * T - Lv.ladX) < 12 * T);   // keep the pile off the ladder
     for (let k = -2; ok && k <= 4; k++) if (g[top][cc + k] !== 1 || g[top - 1][cc + k] !== 0 || g[top - 2][cc + k] !== 0 || g[top - 3][cc + k] !== 0) ok = false;
     if (ok) { Lv.enemies.push(mkEnemy('unpaid', cc * T, (top - 1) * T)); break; }
   }
@@ -626,6 +646,8 @@ function genLevel(y, mob) {
       }
     }
   }
+  // no TRS hearts while mobilized: those spots become "ASK ABOUT BAH!" (points instead of a heart)
+  if (mob) Lv.items.forEach(it => { if (it.t === 'trs') it.t = 'bah'; });
   // 12 drill weekends per year, 4 points each
   const extra = [];
   for (let cc = 10; cc < cols - 12; cc += 5) {
@@ -651,6 +673,7 @@ function startYear(y) {
   pts = 15; runPay = 0; hearts = 3; checkHit = false; endReason = ''; fundT = 0;
   bullets = []; shots = []; parts = []; pops = []; conf = [];
   pl = newPl(); mobT = 0; dd214T = 0; shopT = 0;
+  agrTr = null; remoteT = 0; agrEndT = 0; atDoor = false; document.body.classList.remove('atdoor');
   addHeli(); addEvents();
   cam = 0;
   go('intro');
@@ -690,6 +713,129 @@ function mobComplete() {
   prog.years = Math.max(prog.years, year); prog.pay += runPay; prog.cleared++; save();
   notify('roa-good-year-complete');
   go('mobwin'); confetti();
+}
+
+/* ===================== AGR LAYER =====================
+   Every regular year has a ladder near the middle. Climb it (UP) for an Active Guard Reserve tour:
+   a dingy installation, TRICARE PRIME REMOTE (+1 heart, machine gun, updated DEERS), then swarms of
+   emails, taskers, spreadsheets, slides, broken systems and the odd broken A/C. Finish = +365 pts. */
+function genAgr(y) {
+  const r = rng(y * 104729 + 4242), d = (y - 1) / 19;
+  const ri = (a, b) => a + Math.floor(r() * (b - a + 1));
+  const cols = 110 + y * 4, g = [];
+  for (let i = 0; i < ROWS; i++) g.push(new Uint8Array(cols));
+  const col = (c, h) => { for (let i = h; i < ROWS; i++) g[i][c] = 1; };
+  const Lv = { cols, g, items: [], enemies: [], targets: [], checkX: 0, checkY: 8, flagX: 0, flagY: 8, spawn: { x: 2 * T, y: 7 * T + 2 },
+    goodFlag: true, mob: false, agr: true, theme: 'agr', remX: 12 * T, shutT: 0,
+    swT: 60, swRate: Math.max(24, Math.round(64 - y * 1.6)), swCap: Math.min(18, 8 + (y >> 1)) };
+  const foe = (t, x, gy) => Lv.enemies.push(mkEnemy(t, x, gy));
+  let h = 8, c = 0, cpDone = false, acI = 0;
+  const acAt = [0.3, 0.62, 0.86];
+  for (; c < 34; c++) col(c, h);   // opening stretch with the TRICARE PRIME REMOTE building
+  while (c < cols - 14) {
+    if (!cpDone && c > cols * 0.5) {
+      for (let i = 0; i < 5; i++, c++) col(c, h);
+      Lv.checkX = (c - 3) * T; Lv.checkY = h; cpDone = true; continue;
+    }
+    if (!Lv.mtX && c > cols * 0.18) {   // MILTECH supply box floating over a flat stretch: shoot it for a wingman
+      for (let i = 0; i < 6; i++, c++) col(c, h);
+      Lv.mtX = (c - 4) * T;
+      Lv.targets.push({ t: 'miltech', x: Lv.mtX, y: h * T - 60, baseY: h * T - 60, w: 20, h: 16, hp: 2, flash: 0 });
+      continue;
+    }
+    if (acI < acAt.length && c > cols * acAt[acI]) {   // the occasional broken air conditioner
+      const s = c;
+      for (let i = 0; i < 8; i++, c++) col(c, h);
+      if (acI === 0 || r() < 0.75) foe('ac', (s + 4) * T, (h - 1) * T);
+      acI++; continue;
+    }
+    const k = r();
+    if (k < 0.14) {                      // pit (falling costs a heart up here)
+      const w = ri(2, 3);
+      c += w;
+      for (let i = 0; i < 2; i++, c++) col(c, h);
+    } else if (k < 0.32) {               // step up or down
+      h = Math.max(6, Math.min(9, h + (r() < 0.5 ? -1 : 1)));
+      const len = ri(3, 6);
+      for (let i = 0; i < len; i++, c++) col(c, h);
+    } else if (k < 0.56) {               // stack of dead filing cabinets
+      const len = ri(5, 8), s = c;
+      for (let i = 0; i < len; i++, c++) col(c, h);
+      const py = h - 3, pw = ri(3, 4);
+      for (let i = 0; i < pw; i++) g[py][s + 1 + i] = 2;
+      if (r() < 0.3) Lv.items.push({ t: r() < 0.5 ? 'heart' : 'pay', x: (s + 2) * T + 2, y: (py - 1) * T });
+      if (r() < 0.4 + d * 0.3) foe(r() < 0.6 ? 'dts' : 'ppt', (c - 1) * T, (h - 1) * T);
+    } else {                             // flat ground: pay, broken systems and slide decks
+      const len = ri(5, 9), s = c;
+      for (let i = 0; i < len; i++, c++) { col(c, h); if (r() < 0.2) Lv.items.push({ t: 'pay', x: c * T + 2, y: (h - 1) * T + 2 }); }
+      if (r() < 0.6) foe(r() < 0.6 ? 'dts' : 'ppt', (c - 2) * T, (h - 1) * T);
+      if (r() < d * 0.6) foe('dts', (s + 1) * T, (h - 1) * T);
+    }
+  }
+  for (; c < cols; c++) col(c, h);
+  Lv.flagX = (cols - 6) * T; Lv.flagY = h;
+  // HIGHER HQ drone flyovers: at least three per tour (four from year 10 on)
+  Lv.droneAt = (y >= 10 ? [0.24, 0.44, 0.64, 0.82] : [0.26, 0.52, 0.78]).map(f => Math.floor(cols * f) * T);
+  [0.4, 0.75].forEach(f => {   // two FULL BAH pickups (points, not hearts)
+    for (let cc = Math.floor(cols * f); cc < cols - 12; cc++) {
+      let top = -1;
+      for (let i = 0; i < ROWS; i++) if (g[i][cc] === 1) { top = i; break; }
+      if (top > 3 && g[top - 1][cc] === 0 && g[top - 1][cc + 1] === 0 && g[top - 2][cc] === 0) {
+        Lv.items.push({ t: 'fullbah', x: cc * T - 2, y: (top - 2) * T - 4, w: 21, h: 18 }); break;
+      }
+    }
+  });
+  return Lv;
+}
+function wingPos() {   // where the MILTECH wingman stands: your path a few frames back, just behind you
+  if (!L || !L.wing || !pl.hist || !pl.hist.length) return null;
+  const h0 = pl.hist[0];
+  return { x: pl.face > 0 ? Math.min(h0.x, pl.x - 11) : Math.max(h0.x, pl.x + 11), y: h0.y, onG: h0.onG, vx: h0.vx };
+}
+function startClimb() {
+  L.agrTaken = true; atDoor = false; document.body.classList.remove('atdoor');
+  Object.assign(pl, { vx: 0, vy: 0, car: 0, climb: true, x: L.ladX + 3 });
+  agrTr = { ph: 'climb', t: 0 };
+  pop(pl.x - 70, pl.y - 30, 'ACTIVE GUARD RESERVE!', C.gold);
+  sfx.power();
+}
+function stepAgrTr() {
+  const a = agrTr; a.t++;
+  if (a.ph === 'climb') {
+    pl.y -= 1.2; pl.x = L.ladX + 3;
+    if (a.t % 12 === 0) tone(a.t % 24 ? 520 : 620, 0.05, 'square', 0.03);
+    stepFx();
+    if (pl.y + pl.h < -6) { a.ph = 's1'; a.t = 0; sfx.mobilize(); }
+  } else if (a.ph === 's1') {
+    if (a.t >= 45) { a.ph = 'msg'; a.t = 0; sfx.win(); }
+  } else if (a.ph === 'msg') {
+    // 7 seconds to read it, or press JUMP / FIRE after 1.5 seconds to PCS right away
+    if (a.t >= 420 || (a.t > 90 && (ev.jump || ev.fire || ev.ok || ev.enter))) { enterAgr(); a.ph = 's2'; a.t = 0; sfx.vroom(); }
+  } else if (a.ph === 's2') {
+    if (a.t >= 45) { agrTr = null; pl.inv = 60; }
+  }
+}
+function enterAgr() {
+  // points, pay and hearts carry over into the AGR tour
+  L = genAgr(year);
+  bullets = []; shots = []; parts = []; pops = []; checkHit = false; fundT = 0;
+  pl = newPl(); pl.inv = 60; cam = 0;
+  atDoor = false; document.body.classList.remove('atdoor');
+  syncMusic();
+}
+function finishRemote() {
+  L.upgraded = true; L.handF = frameN - 16;
+  pop(pl.x - 40, pl.y - 50, 'DEERS UPDATED!', C.steel);
+  pop(pl.x - 70, pl.y - 38, 'WEAPON UPGRADE: 2X FIRE', C.green);
+  pl.inv = 60; sfx.power();
+}
+function agrComplete() {
+  pts += 365;
+  prog.years = Math.max(prog.years, year); prog.pay += runPay; prog.cleared++; save();
+  notify('roa-good-year-complete');
+  if (year >= 20) { confetti(); go('letter'); }
+  else if (year + 1 > MAXY) { go('win'); confetti(); }
+  else startYear(year + 1);   // straight back down to the next regular year
 }
 
 /* ===================== PHYSICS ===================== */
@@ -801,6 +947,19 @@ function damage(e, n) {
       } else payPop(e.x - 40, e.y - 12, earn(500), 'STACK SHREDDED! +$500');
       return;
     }
+    if (e.t === 'ac') {
+      for (let i = 0; i < 4; i++) burst(e.x + Math.random() * e.w, e.y + Math.random() * e.h, i % 2 ? '#9fd3ff' : '#9aa0a8');
+      sfx.boom(true);
+      payPop(e.x - 30, e.y - 14, earn(200), 'A/C FIXED?! +$200');
+      return;
+    }
+    if (e.t === 'drone') {
+      for (let i = 0; i < 4; i++) burst(e.x + Math.random() * e.w, e.y + Math.random() * e.h, i % 2 ? '#9aa0a8' : C.gold);
+      sfx.boom(true);
+      payPop(e.x - 40, e.y - 14, earn(150), 'HIGHER HQ GROUNDED! +$150');
+      return;
+    }
+    if (AGR_FOES.has(e.t)) burst(e.x + e.w / 2, e.y + e.h / 2, e.t === 'xls' ? '#1d7a3a' : e.t === 'sys' ? '#1d5fd1' : e.t === 'slide' ? '#e8752a' : C.red);
     const bonus = e.t === 'ppt' ? 100 : e.t === 'dts' || e.t === 'dfas' ? 50 : 25;
     payPop(e.x, e.y - 10, earn(bonus));
   }
@@ -823,6 +982,10 @@ function collect(it) {
       hearts = Math.min(5, hearts + 1); pop(it.x - 50, it.y - 10, 'TRICARE PRIME +1 HEART', C.red); sfx.power(); break;
     case 'trs':
       hearts = Math.min(5, hearts + 1); pop(it.x - 30, it.y - 10, 'TRS +1 HEART', C.red); sfx.power(); break;
+    case 'bah':
+      pts += 10; pop(it.x - 30, it.y - 10, 'BAH! +10 PTS', C.green); sfx.coin(); sfx.power(); break;
+    case 'fullbah':
+      pts += 15; pop(it.x - 40, it.y - 10, 'FULL BAH! +15 PTS', C.green); sfx.coin(); sfx.power(); break;
     case 'heart':
       if (hearts < 3) { hearts++; pop(it.x - 36, it.y - 10, 'PHA DONE +1', C.red); }
       else payPop(it.x - 8, it.y - 10, earn(100));
@@ -863,6 +1026,58 @@ function endYear() {
 function stepEnemy(e) {
   e.tm++; if (e.flash > 0) e.flash--;
   const dirTo = pl.x < e.x ? -1 : 1;
+  if (e.t === 'drone') {   // HIGHER HQ: hovers just above jump height, bombs you with taskers, then leaves
+    const cc = Math.floor((pl.x + 5) / T);
+    for (let i = 0; i < ROWS; i++) if (L.g[i][cc] === 1) { e.ty = i * T - 74; break; }
+    e.y += ((e.ty || 52) - e.y) * 0.05 + Math.sin(e.tm * 0.12) * 0.3;
+    if (!e.leaving) {
+      const tx = pl.x + 40 + Math.sin(e.tm * 0.02) * e.off;
+      const dx = Math.max(-1.6, Math.min(1.6, (tx - e.x) * 0.05));
+      e.x += dx; e.dir = dx < 0 ? -1 : 1;
+      if (Math.abs(e.x + e.w / 2 - pl.x) < 150 && e.drops > 0 && --e.dropT <= 0) {
+        const b = mkFly('tasker', e.x + e.w / 2 - 6, e.y + e.h);
+        b.bomb = true; b.vx = 0; b.vy = 0.5; L.enemies.push(b);
+        e.drops--; e.dropT = 22 + Math.floor(Math.random() * 16);
+        tone(900, 0.25, 'square', 0.03, -700);   // falling whistle
+        if (e.drops === 0) { e.leaving = true; pop(e.x - 20, e.y - 14, 'TASKED!', C.red); }
+      }
+    } else {
+      e.x += 2.2; e.ty = -60; e.dir = 1;
+      if (e.y < -24 || e.x > cam + W + 30) e.dead = true;
+    }
+    return;
+  }
+  if (e.bomb) {   // tasker dropped like a bomb: falls, lands with a thud, then joins the swarm
+    e.vy = Math.min(e.vy + 0.16, 4.5); e.y += e.vy;
+    if (solidPt(e.x + 7, e.y + e.h)) {
+      e.bomb = false; e.y = Math.floor((e.y + e.h) / T) * T - e.h - 1; e.vy = -1.2; e.vx = 0;
+      burst(e.x + 7, e.y + e.h, C.paper); noise(0.15, 0.06, 1500, 200);
+    }
+    if (e.y > H + 20) e.dead = true;
+    return;
+  }
+  if (e.sw) {   // swarm flyer: steers toward a point near you, wobbling, through walls
+    if (e.tm % 90 === 1) { e.ox = (Math.random() - 0.5) * 44; e.oy = (Math.random() - 0.5) * 30; }
+    const dx = pl.x + pl.w / 2 + e.ox - (e.x + e.w / 2), dy = pl.y + pl.h / 2 + e.oy - (e.y + e.h / 2), dist = Math.hypot(dx, dy) || 1;
+    e.vx += dx / dist * 0.06; e.vy += dy / dist * 0.06;
+    const sp = Math.hypot(e.vx, e.vy);
+    if (sp > e.sp) { e.vx *= e.sp / sp; e.vy *= e.sp / sp; }
+    e.x += e.vx; e.y += e.vy + Math.sin(e.tm * 0.1 + e.ph) * 0.3;
+    e.dir = e.vx < 0 ? -1 : 1;
+    return;
+  }
+  if (e.t === 'ac') {   // lumbers toward you and blasts hot air
+    e.vx = Math.abs(pl.x - e.x) < 260 ? dirTo * 0.25 : 0; e.vy = Math.min(e.vy + 0.35, 7); e.dir = dirTo;
+    move(e);
+    if (e.onG) { const fx = e.vx > 0 ? e.x + e.w + 1 : e.x - 1; if (e.vx && !solidPt(fx, e.y + e.h + 2)) e.x -= e.vx; }
+    if (e.tm % 100 === 0 && Math.abs(pl.x - e.x) < 240) {
+      shots.push({ x: e.x + (dirTo > 0 ? e.w : -8), y: e.y + 6, vx: dirTo * 1.6, w: 8, h: 6, life: 180, hot: true });
+      noise(0.25, 0.05, 900, 200);
+    }
+    if (e.tm % 9 === 0) parts.push({ x: e.x + 4 + Math.random() * (e.w - 8), y: e.y + e.h, vx: 0, vy: 0.5, life: 20, col: '#6fb6e8' });   // drip
+    if (e.y > H + 20) e.dead = true;
+    return;
+  }
   if (e.t === 'tape' || e.t === 'unpaid') {
     e.vx = e.dir * (e.t === 'unpaid' ? 0.3 : 0.55); e.vy = Math.min(e.vy + 0.35, 7);
     if (move(e)) e.dir *= -1;
@@ -918,6 +1133,9 @@ function stepPlay() {
   if (mobT > 0) { mobT--; if (mobT === 0) enterMob(); return; }
   if (dd214T > 0) { dd214T--; if (dd214T === 0) mobComplete(); return; }
   if (shopT > 0) { shopT--; return; }   // inside the store
+  if (agrTr) { stepAgrTr(); return; }   // climbing the AGR ladder / PCS transition
+  if (remoteT > 0) { remoteT--; if (remoteT === 0) finishRemote(); return; }   // inside TRICARE PRIME REMOTE
+  if (agrEndT > 0) { agrEndT--; stepConfetti(); if (agrEndT === 0) agrComplete(); return; }
   // ADOS orders: short celebration, then jump ahead a year
   if (L.adosT > 0) { L.adosT--; stepFx(); if (L.adosT === 0) adosOrders(); return; }
   const p = pl, l = hold.left(), r = hold.right(), vmax = p.car > 0 ? 2.6 : 2;
@@ -931,6 +1149,10 @@ function stepPlay() {
   if (!hold.jump() && p.vy < -2.5) p.vy = -2.5;
   p.vy = Math.min(p.vy + 0.35, 7);
   move(p);
+  if (L.wing) {   // the MILTECH wingman replays where you were a few frames ago
+    (p.hist = p.hist || []).push({ x: p.x, y: p.y, onG: p.onG, vx: p.vx });
+    if (p.hist.length > 9) p.hist.shift();
+  }
   if (Math.abs(p.vx) > 0.2 && p.onG) p.run++;
   if (p.inv > 0) p.inv--;
   if (p.shield > 0) p.shield--;
@@ -942,11 +1164,13 @@ function stepPlay() {
   if (p.cd > 0) p.cd--;
   if ((ev.fire || hold.fire()) && p.cd <= 0) {
     bullets.push({ x: p.face > 0 ? p.x + p.w : p.x - 6, y: p.y + 6, vx: 4.5 * p.face, life: 36, w: 6, h: 3 });
+    const wg = wingPos();
+    if (wg) bullets.push({ x: p.face > 0 ? wg.x + p.w : wg.x - 6, y: wg.y + 6, vx: 4.5 * p.face, life: 40, w: 6, h: 3 });
     p.cd = L.upgraded ? 6 : 13; sfx.shoot();
   }
 
   if (p.y > H + 8) {
-    if (L.mob) fall(); else { mobT = 120; p.vy = 0; sfx.mobilize(); }
+    if (L.mob || L.agr) fall(); else { mobT = 120; p.vy = 0; sfx.mobilize(); }
     return;
   }
   if (touchesSpike(p)) hurt(null);
@@ -955,25 +1179,55 @@ function stepPlay() {
   for (const b of bullets) { b.x += b.vx; b.life--; if (b.life <= 0 || solidPt(b.x + 3, b.y + 1)) b.dead = true; }
 
   for (const e of L.enemies) {
+    if (e.sw && e.x < cam - 90) { e.dead = true; continue; }   // swarm flyers left far behind give up
     if (e.dead || e.x > cam + W + 40 || e.x < cam - 80) continue;
     stepEnemy(e);
     for (const b of bullets) if (!b.dead && !e.dead && hit(b, e)) { b.dead = true; damage(e, 1); }
     if (!e.dead && hit(p, e)) {
       if (p.shield > 0) damage(e, 9);
-      else if (p.vy > 0 && p.y + p.h - e.y < 9) { damage(e, e.t === 'ppt' || e.t === 'unpaid' ? 1 : 9); p.vy = e.t === 'boss' ? -6 : -5; sfx.stomp(); }
+      else if (p.vy > 0 && p.y + p.h - e.y < 9) { damage(e, e.t === 'ppt' || e.t === 'unpaid' || e.t === 'ac' || e.t === 'drone' ? 1 : 9); p.vy = e.t === 'boss' ? -6 : -5; sfx.stomp(); }
       else if (e.t === 'dfas') recoup(e);
       else hurt(e);
     }
   }
   if (state !== 'play') return;
   L.enemies = L.enemies.filter(e => !e.dead);
-  const door = L.commX ? L.commX + 40 : -999;
-  const nowDoor = !L.commUsed && p.onG && p.x + p.w > door && p.x < door + 16 && Math.abs(p.y + p.h - L.commY * T) < 3;
-  if (nowDoor !== atDoor) { atDoor = nowDoor; document.body.classList.toggle('atdoor', atDoor); }
+  if (L.agr && L.remoteUsed && p.x > L.remX + 130 && p.x < L.flagX - 3 * T && --L.swT <= 0) {   // the swarm
+    L.swT = L.swRate + Math.floor(Math.random() * L.swRate);
+    const alive = L.enemies.reduce((n, e) => n + (e.sw ? 1 : 0), 0);
+    const kinds = ['email', 'tasker', 'xls', 'slide', 'sys', 'email', 'tasker'];
+    const grp = 2 + (Math.random() < 0.3 + year * 0.02 ? 1 : 0), fromTop = Math.random() < 0.3;
+    const bx = fromTop ? cam + 60 + Math.random() * (W - 80) : cam + W + 8, by = fromTop ? -16 : 20 + Math.random() * 80;
+    for (let i = 0; i < grp && alive + i < L.swCap; i++)
+      L.enemies.push(mkFly(kinds[Math.floor(Math.random() * kinds.length)], bx + (fromTop ? i * 18 : i * 10), by + (fromTop ? -i * 8 : i * 14)));
+  }
+  if (L.agr && L.remoteUsed && L.droneAt && L.droneAt.length && p.x > L.droneAt[0]) {   // HIGHER HQ inbound
+    L.droneAt.shift();
+    L.enemies.push(mkDrone(cam + W + 10));
+    pop(p.x - 50, 30, 'HIGHER HQ INBOUND!', C.red); sfx.chopper();
+  }
+  const door = L.commX ? L.commX + 40 : -999, ground = (gy) => p.onG && Math.abs(p.y + p.h - gy * T) < 3;
+  let kind = '';
+  if (!L.commUsed && p.x + p.w > door && p.x < door + 16 && ground(L.commY)) kind = 'comm';
+  else if (L.ladX && !L.agrTaken && p.x + p.w / 2 > L.ladX && p.x + p.w / 2 < L.ladX + 16 && ground(L.ladY)) kind = 'ladder';
+  else if (L.agr && !L.remoteUsed && p.x + p.w > L.remX + 40 && p.x < L.remX + 56 && ground(8)) kind = 'remote';
+  doorKind = kind;
+  if (!!kind !== atDoor) { atDoor = !!kind; document.body.classList.toggle('atdoor', atDoor); }
   if (atDoor && ev.enter) {
-    L.commUsed = true; atDoor = false; document.body.classList.remove('atdoor');
+    atDoor = false; document.body.classList.remove('atdoor');
+    if (kind === 'ladder') { startClimb(); return; }
+    if (kind === 'remote') {
+      L.remoteUsed = true; remoteT = 240; p.vx = 0;
+      hearts = Math.min(5, hearts + 1); sfx.shop();
+      return;
+    }
+    L.commUsed = true;
     hearts = Math.max(hearts, 3); shopT = 100; p.vx = 0; L.shopBonus = earn(500); sfx.shop();
     return;
+  }
+  if (L.agr && !L.remoteUsed && p.x > L.remX + 104) {   // you have to check in first
+    p.x = L.remX + 104; p.vx = 0;
+    if (!L.lockMsg || frameN - L.lockMsg > 90) { L.lockMsg = frameN; pop(p.x - 140, p.y - 22, 'CHECK IN AT TRICARE PRIME REMOTE!', C.red); }
   }
   if (L.shutAt && !L.shutDone && p.x > L.shutAt) {
     L.shutDone = true; L.shutT = 600;
@@ -1000,7 +1254,7 @@ function stepPlay() {
   for (const tg of L.targets) {   // power-ups you shoot: IDT TRAVEL car and ADOS orders
     if (tg.got) continue;
     if (tg.flash > 0) tg.flash--;
-    if (tg.t === 'ados' || tg.t === 'tamp' || tg.t === 'premob' || tg.t === 'law') tg.y = tg.baseY + Math.sin(frameN * 0.05 + tg.x) * 3;
+    if (tg.t === 'ados' || tg.t === 'tamp' || tg.t === 'premob' || tg.t === 'law' || tg.t === 'miltech') tg.y = tg.baseY + Math.sin(frameN * 0.05 + tg.x) * 3;
     if (tg.t === 'cont') {
       if (tg.falling) { tg.y += 0.45; if (tg.y >= tg.baseY) tg.falling = false; }
       else tg.y = tg.baseY + Math.sin(frameN * 0.04) * 8;   // drifts on its parachute
@@ -1010,7 +1264,12 @@ function stepPlay() {
       b.dead = true; tg.hp--; tg.flash = 6;
       if (tg.hp > 0) { sfx.hit(); continue; }
       tg.got = true;
-      if (tg.t === 'law') {
+      if (tg.t === 'miltech') {
+        L.wing = true; L.wingF = frameN; p.hist = [];
+        for (let i = 0; i < 3; i++) burst(tg.x + 10, tg.y + 8, i % 2 ? C.green : C.gold);
+        pop(tg.x - 30, tg.y - 26, 'MILTECH ON DECK!', C.green);
+        pop(tg.x - 30, tg.y - 14, '2X FIREPOWER!', C.gold); sfx.power(); sfx.win();
+      } else if (tg.t === 'law') {
         prog.lawShield = true; save();
         burst(tg.x + 8, tg.y + 8, C.gold); burst(tg.x + 8, tg.y + 8, C.navy);
         pop(tg.x - 40, tg.y - 24, 'ROA LAW CENTER ON YOUR SIDE!', C.gold);
@@ -1057,6 +1316,11 @@ function stepPlay() {
     pop(p.x - 88, p.y - 62, 'WEAPON UPGRADE: 2X FIRE', C.green);
   }
   if (L.mob && p.x + p.w >= L.flagX + 4) { pop(p.x - 40, p.y - 20, '+365 PTS', C.gold); dd214T = 210; sfx.win(); return; }
+  if (L.agr && p.x + p.w >= L.flagX + 4) {   // end of the AGR tour
+    L.enemies = L.enemies.filter(e => !e.sw); shots = [];
+    agrEndT = 240; confetti(); sfx.win(); setTimeout(() => sfx.power(), 700);
+    return;
+  }
   if (p.x + p.w >= L.flagX + 4) {
     if (L.boss && !L.boss.dead) {
       p.x = L.flagX + 4 - p.w; p.vx = 0;
@@ -1255,6 +1519,41 @@ function drawThemeBG(scroll, th) {
       const fx = (((i * 53 - scroll * 0.3 + frameN * 0.15 * (i % 3)) % W) + W) % W, fy = (i * 29 + frameN * (0.3 + (i % 3) * 0.2)) % H;
       ctx.fillRect(Math.floor(fx), Math.floor(fy), 1, 1);
     }
+  } else if (th === 'agr') {   // dingy installation: hazy sky, smokestack, run-down buildings with hanging signs
+    ctx.fillStyle = '#6e6a5e'; ctx.fillRect(0, 0, W, H);
+    bands(['#7a7566', '#857f6e', '#8f8876', '#968f7c'], 30, 16);
+    layer(scroll, 0.12, 150, (x, i) => {
+      ctx.fillStyle = '#5d594f'; ctx.fillRect(x + 20, 96, 46, 84); ctx.fillRect(x + 90, 84, 10, 96);   // distant hangar + stack
+      ctx.fillStyle = '#4f4b43'; ctx.fillRect(x + 92, 76, 6, 8);
+      ctx.fillStyle = 'rgba(70,66,58,.6)';
+      const s = (frameN * 0.2 + i * 13) % 30; ctx.fillRect(x + 93 + s * 0.4, 70 - s, 6 + s * 0.3, 4);   // smoke
+      ctx.fillStyle = '#6a665a'; ctx.fillRect(x + 110, 60, 3, 120); ctx.fillRect(x + 104, 52, 15, 10);   // water tower
+    });
+    layer(scroll, 0.45, 132, (x, i) => {
+      const bw = 100, bh = 56 + Math.floor(hsh(i) * 22), by = 150 - bh;
+      ctx.fillStyle = '#8a8170'; ctx.fillRect(x, by, bw, bh + 30);
+      ctx.fillStyle = '#6f6757'; ctx.fillRect(x - 2, by - 3, bw + 4, 4);
+      ctx.fillStyle = 'rgba(80,60,40,.35)'; ctx.fillRect(x + 12, by + 4, 2, bh - 8); ctx.fillRect(x + 70, by + 4, 3, bh - 16);   // stains
+      for (let wy = by + 10; wy < 140; wy += 15) for (let wx = x + 8; wx < x + bw - 10; wx += 16) {
+        ctx.fillStyle = '#3a3a34'; ctx.fillRect(wx, wy, 9, 8);
+        if (hsh(wx + wy) > 0.6) { ctx.fillStyle = '#8f8a7a'; ctx.fillRect(wx + 1, wy + 1, 7, 2); ctx.fillRect(wx + 1, wy + 4, 5, 2); }   // busted blinds
+        else if (hsh(wx * 3 + wy) > 0.85) { ctx.fillStyle = '#c9c37a'; ctx.fillRect(wx + 1, wy + 1, 7, 6); }                    // one sad light
+      }
+      ctx.fillStyle = '#5d5a52'; ctx.fillRect(x + bw - 22, by + 14, 16, 10);   // window A/C unit, dripping
+      ctx.fillStyle = '#4a4740'; for (let k = 0; k < 4; k++) ctx.fillRect(x + bw - 20 + k * 4, by + 16, 2, 6);
+      ctx.fillStyle = '#6fb6e8'; ctx.fillRect(x + bw - 14, by + 25 + (frameN + i * 7) % 12, 1, 2);
+      const kind = hsh(i + 31);   // signs hanging crooked off the buildings
+      if (kind < 0.85) {
+        const no = kind < 0.42, sx = x + 18, sy = by + 6, sw = no ? 58 : 82, sh = no ? 14 : 24;
+        ctx.fillStyle = '#2b2b2b'; ctx.fillRect(sx + 6, sy - 6, 1, 6); ctx.fillRect(sx + sw - 8, sy - 6, 1, 9);
+        ctx.save(); ctx.translate(sx, sy); ctx.rotate(no ? -0.06 : 0.05);
+        ctx.fillStyle = no ? C.red : '#e9e2c8'; ctx.fillRect(0, 0, sw, sh);
+        ctx.fillStyle = '#2b2b2b'; ctx.fillRect(0, 0, sw, 1); ctx.fillRect(0, sh - 1, sw, 1);
+        if (no) txt('NO A/C', sw / 2, 3, C.paper, 8, 'center');
+        else { txt("WHERE'S", sw / 2, 3, C.red, 8, 'center'); txt('THE MTF??', sw / 2, 13, C.navy, 8, 'center'); }
+        ctx.restore();
+      }
+    });
   } else {   // forest
     ctx.fillStyle = '#4f84a8'; ctx.fillRect(0, 0, W, H);
     bands(['#6597b8', '#7ea9c6', '#98bcd3', '#b2cfdf'], 40, 16);
@@ -1339,7 +1638,8 @@ const TILE_TH = {
   home:   { dirt:'#5b4327', speck:'#47341e', top:'#4f8a2b', hi:'#76b941', blade:'#3d6d20' },
   jungle: { dirt:'#3e2a16', speck:'#2c1d0e', top:'#2f8a2f', hi:'#59c23a', blade:'#1d5e1d', pb:'#8a5a2b', ph:'#b07a40', pl:'#5c3a18' },
   arctic: { dirt:'#8fc1e3', speck:'#6fa8d3', top:'#ffffff', hi:'#ffffff', blade:'#cfe6f5', pb:'#cfeaf9', ph:'#ffffff', pl:'#8fc1e3' },
-  forest: { dirt:'#4a3520', speck:'#35251a', top:'#3b6e2a', hi:'#5c9a3a', blade:'#284d1c', pb:'#6b4423', ph:'#8a5a33', pl:'#4a2e17' }
+  forest: { dirt:'#4a3520', speck:'#35251a', top:'#3b6e2a', hi:'#5c9a3a', blade:'#284d1c', pb:'#6b4423', ph:'#8a5a33', pl:'#4a2e17' },
+  agr:    { dirt:'#5a564e', speck:'#46433c', top:'#77736a', hi:'#9a968c', blade:'#3e3b35', pb:'#7d8290', ph:'#a3a8b4', pl:'#555a66' }   // cracked concrete, dead cabinets
 };
 function drawTile(v, c, r) {
   const x = c * T, y = r * T, hh = r === ROWS - 1 ? T + 4 : T;
@@ -1379,6 +1679,10 @@ function drawFlag(x, gy, final) {
     ctx.fillStyle = '#4b5320'; ctx.fillRect(x + 2, gy - 46, 24, 15);
     ctx.fillStyle = C.gold; ctx.fillRect(x + 12, gy - 42, 3, 3); ctx.fillRect(x + 11, gy - 41, 5, 1); ctx.fillRect(x + 13, gy - 43, 1, 5);
     txt('REDEPLOYMENT', x - 46, gy - 62, C.gold);
+  } else if (final && L.agr) {   // ending flag three: end of the AGR tour
+    ctx.fillStyle = '#2f5bb7'; ctx.fillRect(x + 2, gy - 46, 24, 15);
+    ctx.fillStyle = C.gold; ctx.fillRect(x + 6, gy - 42, 16, 2); ctx.fillRect(x + 6, gy - 37, 16, 2);
+    txt('END OF TOUR', x - 42, gy - 62, C.gold);
   } else if (final) {
     ctx.fillStyle = C.red; ctx.fillRect(x + 2, gy - 46, 24, 15);
     ctx.fillStyle = C.paper; ctx.fillRect(x + 2, gy - 42, 24, 2); ctx.fillRect(x + 2, gy - 37, 24, 2);
@@ -1421,6 +1725,17 @@ function drawItem(it) {
       const on = frameN % 30 < 20;
       txt('TRICARE', x + 15, y - 12, on ? C.paper : C.steel, 8, 'center');
       txt('PRIME', x + 15, y - 2, on ? C.gold : C.paper, 8, 'center');
+      break;
+    }
+    case 'bah': case 'fullbah': {   // little house with a $ on it
+      const full = it.t === 'fullbah', on = frameN % 30 < 20;
+      if (full) txt('FULL BAH', x + 10, y - 12, on ? C.gold : C.paper, 8, 'center');
+      else { txt('ASK ABOUT', x + 10, y - 22, on ? C.paper : C.steel, 8, 'center'); txt('BAH!', x + 10, y - 12, on ? C.gold : C.paper, 8, 'center'); }
+      ctx.fillStyle = C.red; for (let r = 0; r < 7; r++) ctx.fillRect(x + 10 - r - 1, y + r, r * 2 + 2, 1);   // roof
+      ctx.fillStyle = C.paper; ctx.fillRect(x + 3, y + 7, 15, 11);
+      ctx.fillStyle = C.navy; ctx.fillRect(x + 13, y + 11, 3, 7);
+      ctx.fillStyle = '#1f6e2a'; ctx.fillRect(x + 5, y + 9, 6, 6);
+      ctx.fillStyle = C.gold; ctx.fillRect(x + 7, y + 9, 2, 6); ctx.fillRect(x + 6, y + 10, 4, 1); ctx.fillRect(x + 6, y + 12, 4, 1); ctx.fillRect(x + 6, y + 14, 4, 1);
       break;
     }
     case 'trs': {   // big red heart with TRS in white
@@ -1527,6 +1842,16 @@ function drawTarget(tg) {
     ctx.fillStyle = C.gold;
     ctx.fillRect(x + 7, y + 2, 2, 10); ctx.fillRect(x + 3, y + 3, 10, 1); ctx.fillRect(x + 5, y + 12, 6, 1);
     ctx.fillRect(x + 2, y + 6, 4, 1); ctx.fillRect(x + 3, y + 4, 1, 2); ctx.fillRect(x + 10, y + 6, 4, 1); ctx.fillRect(x + 12, y + 4, 1, 2);
+    return;
+  }
+  if (tg.t === 'miltech') {   // supply crate: shoot it to bring a MILTECH onto the team
+    txt('MILTECH', x + 10, y - 13, frameN % 24 < 16 ? C.green : C.gold, 8, 'center');
+    ctx.fillStyle = C.gold; ctx.fillRect(x - 1, y - 1, 22, 18);
+    ctx.fillStyle = '#8a6a3a'; ctx.fillRect(x, y, 20, 16);
+    ctx.fillStyle = '#6b4f2a'; ctx.fillRect(x, y + 5, 20, 1); ctx.fillRect(x, y + 10, 20, 1); ctx.fillRect(x + 2, y, 1, 16); ctx.fillRect(x + 17, y, 1, 16);
+    ctx.fillStyle = '#e9e2c8';   // stencilled double-figure
+    ctx.fillRect(x + 5, y + 4, 3, 3); ctx.fillRect(x + 4, y + 8, 5, 5); ctx.fillRect(x + 12, y + 4, 3, 3); ctx.fillRect(x + 11, y + 8, 5, 5);
+    for (let i = 0; i < 2; i++) { ctx.fillStyle = i < tg.hp ? C.gold : '#3a4a6a'; ctx.fillRect(x + 5 + i * 6, y + 19, 4, 2); }
     return;
   }
   if (tg.t === 'premob') {
@@ -1679,10 +2004,169 @@ function drawCommissary(x, gy) {
   ctx.fillStyle = '#4a4a4a'; ctx.fillRect(dx - 1, y + 29, 18, h - 29);
   ctx.fillStyle = L.commUsed ? '#5d6170' : '#9fd3ff'; ctx.fillRect(dx, y + 30, 7, h - 34); ctx.fillRect(dx + 9, y + 30, 7, h - 34);
   if (L.commUsed) { ctx.fillStyle = C.red; ctx.fillRect(dx + 1, y + 38, 14, 6); ctx.fillStyle = C.paper; ctx.fillRect(dx + 3, y + 40, 10, 2); }
-  else if (atDoor) txt(document.body.classList.contains('touch') ? 'TAP UP!' : 'PRESS UP!', dx + 8, y - 16, frameN % 20 < 12 ? C.gold : C.paper, 8, 'center');
+  else if (atDoor && doorKind === 'comm') txt(document.body.classList.contains('touch') ? 'TAP UP!' : 'PRESS UP!', dx + 8, y - 16, frameN % 20 < 12 ? C.gold : C.paper, 8, 'center');
   // shopping cart
   ctx.fillStyle = '#9aa0a8'; ctx.fillRect(x + 62, gy - 9, 10, 5); ctx.fillRect(x + 72, gy - 11, 1, 3);
   ctx.fillStyle = '#2b2b2b'; ctx.fillRect(x + 63, gy - 3, 2, 2); ctx.fillRect(x + 69, gy - 3, 2, 2);
+}
+/* ---- AGR layer art ---- */
+const BLUE_PAL = { H:'#1f3f8a', h:'#16306b', S:'#c68642', E:'#1a1a1a', U:'#2f5bb7', u:'#21468f', B:'#111', G:'#2f5bb7', g:'#2f5bb7' };
+function bulbs(x, y, w, h, gap, sz) {   // marquee lightbulbs chasing around a rectangle
+  const pts2 = [];
+  for (let px = x; px < x + w; px += gap) pts2.push([px, y]);
+  for (let py = y; py < y + h; py += gap) pts2.push([x + w, py]);
+  for (let px = x + w; px > x; px -= gap) pts2.push([px, y + h]);
+  for (let py = y + h; py > y; py -= gap) pts2.push([x, py]);
+  const ph = Math.floor(frameN / 6);
+  pts2.forEach(([bx, by], i) => {
+    const on = (i + ph) % 3 !== 0;
+    if (on) { ctx.fillStyle = 'rgba(255,230,120,.35)'; ctx.fillRect(bx - sz, by - sz, sz * 3, sz * 3); }
+    ctx.fillStyle = on ? '#fff3a0' : '#6a5a20'; ctx.fillRect(bx - Math.floor(sz / 2), by - Math.floor(sz / 2), sz, sz);
+  });
+}
+function drawLadder(x, gy) {
+  ctx.fillStyle = '#7d8290';
+  ctx.fillRect(x, -20, 2, gy + 20); ctx.fillRect(x + 14, -20, 2, gy + 20);   // rails run right off the top of the screen
+  ctx.fillStyle = '#a3a8b4';
+  for (let ry = gy - 4; ry > -20; ry -= 7) ctx.fillRect(x + 2, ry, 12, 2);
+  ctx.fillStyle = '#5d6170'; ctx.fillRect(x + 1, -20, 1, gy + 20); ctx.fillRect(x + 15, -20, 1, gy + 20);
+  // the light-up sign at the base
+  const sx = x + 24, sw = 120, sh = 30, sy = gy - 12 - sh;
+  ctx.fillStyle = '#3a3a3a'; ctx.fillRect(sx + 14, sy + sh, 3, 12); ctx.fillRect(sx + sw - 17, sy + sh, 3, 12);
+  ctx.fillStyle = C.navy; ctx.fillRect(sx, sy, sw, sh);
+  ctx.fillStyle = C.red; ctx.fillRect(sx + 3, sy + 3, sw - 6, 1); ctx.fillRect(sx + 3, sy + sh - 4, sw - 6, 1);
+  const on = frameN % 30 < 20;
+  txt('ACTIVE GUARD', sx + sw / 2, sy + 6, on ? C.gold : C.paper, 8, 'center');
+  txt('RESERVE DUTY!', sx + sw / 2, sy + 17, on ? C.paper : C.gold, 8, 'center');
+  bulbs(sx, sy, sw, sh, 6, 2);
+  if (atDoor && doorKind === 'ladder') txt(document.body.classList.contains('touch') ? 'TAP UP!' : 'PRESS UP!', x + 8, gy - 62, frameN % 20 < 12 ? C.gold : C.paper, 8, 'center');
+  else if (!L.agrTaken && frameN % 60 < 40) { ctx.fillStyle = C.gold; ctx.fillRect(x + 7, gy - 70, 2, 8); ctx.fillRect(x + 5, gy - 68, 6, 2); ctx.fillRect(x + 6, gy - 69, 4, 1); }   // up arrow
+}
+function drawRemote(x, gy) {   // TRICARE PRIME REMOTE: a tired clinic with a very bright sign
+  const w = 96, h = 78, y = gy - h;
+  ctx.fillStyle = '#b8ad92'; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = 'rgba(90,70,40,.35)'; ctx.fillRect(x + 8, y + 40, 3, 30); ctx.fillRect(x + 80, y + 44, 2, 26); ctx.fillRect(x + 60, y + 38, 2, 12);
+  ctx.fillStyle = '#8f8570'; ctx.fillRect(x - 3, y - 3, w + 6, 4);
+  ctx.fillStyle = C.navy; ctx.fillRect(x + 4, y + 3, w - 8, 33);
+  ctx.fillStyle = C.gold; ctx.fillRect(x + 4, y + 3, w - 8, 1); ctx.fillRect(x + 4, y + 35, w - 8, 1);
+  const on = frameN % 24 < 16;
+  txt('TRICARE', x + w / 2, y + 5, on ? C.paper : C.steel, 8, 'center');
+  txt('PRIME', x + w / 2, y + 15, on ? C.steel : C.paper, 8, 'center');
+  txt('REMOTE!', x + w / 2, y + 25, on ? C.gold : C.red, 8, 'center');
+  ctx.fillStyle = C.red; ctx.fillRect(x + w - 15, y + 41, 10, 3); ctx.fillRect(x + w - 11, y + 38, 3, 9);   // medical cross
+  ctx.fillStyle = '#3a3a34'; ctx.fillRect(x + 6, y + 46, 22, 14); ctx.fillRect(x + 68, y + 52, 20, 12);
+  ctx.fillStyle = '#8f8a7a'; ctx.fillRect(x + 7, y + 47, 20, 2); ctx.fillRect(x + 7, y + 51, 14, 2); ctx.fillRect(x + 69, y + 54, 18, 2);
+  const dx = x + 40, dt = 44;
+  ctx.fillStyle = '#4a4a4a'; ctx.fillRect(dx - 1, y + dt - 1, 18, h - dt + 1);
+  ctx.fillStyle = L.remoteUsed ? '#5d6170' : (frameN % 50 < 44 ? '#cfe8a8' : '#7d8a62'); ctx.fillRect(dx, y + dt, 16, h - dt);   // flickering light inside
+  ctx.fillStyle = '#4a4a4a'; ctx.fillRect(dx + 7, y + dt, 2, h - dt);
+  if (!L.remoteUsed) {
+    if (atDoor && doorKind === 'remote') txt(document.body.classList.contains('touch') ? 'TAP UP!' : 'PRESS UP!', dx + 8, y - 16, frameN % 20 < 12 ? C.gold : C.paper, 8, 'center');
+    else if (frameN % 60 < 40) txt('+1 HEART', dx + 8, y - 16, C.red, 8, 'center');
+  }
+}
+function drawAgrFoe(e) {
+  const x = Math.round(e.x), y = Math.round(e.y), tm = e.tm;
+  if (e.flash > 0 && e.flash % 2) { ctx.fillStyle = '#fff'; ctx.fillRect(x, y, e.w, e.h); return; }
+  if (e.t === 'drone') {   // HIGHER HQ quadcopter
+    txt('HIGHER HQ', x + 15, y - 12, frameN % 20 < 12 ? C.red : C.paper, 8, 'center');
+    const sp = (frameN >> 1) % 2;
+    [[x + 1, y], [x + 21, y]].forEach(([rx, ry]) => {   // rotors
+      ctx.fillStyle = '#2b2b2b'; ctx.fillRect(rx + 3, ry + 1, 2, 3);
+      ctx.fillStyle = 'rgba(200,205,215,.8)'; ctx.fillRect(rx - 2 + sp * 2, ry, 8 - sp * 4, 1);
+    });
+    ctx.fillStyle = '#4a4e5a'; ctx.fillRect(x + 3, y + 3, 24, 2);   // arms
+    ctx.fillStyle = '#6b7080'; ctx.fillRect(x + 8, y + 4, 14, 6);
+    ctx.fillStyle = '#9aa0a8'; ctx.fillRect(x + 8, y + 4, 14, 1);
+    ctx.fillStyle = frameN % 16 < 8 ? C.red : '#5a0a14'; ctx.fillRect(x + 20, y + 5, 2, 2);   // blinking light
+    ctx.fillStyle = '#111'; ctx.fillRect(x + 13, y + 10, 4, 2); ctx.fillStyle = '#9fd3ff'; ctx.fillRect(x + 14, y + 10, 2, 1);   // camera
+    if (!e.leaving) { ctx.fillStyle = C.paper; ctx.fillRect(x + 11, y + 11, 8, 2); }   // tasker clipped underneath
+    return;
+  }
+  if (e.t === 'tasker' && e.bomb) {   // falling tasker with a little speed streak
+    ctx.fillStyle = 'rgba(240,240,243,.4)'; ctx.fillRect(x + 4, y - 8, 1, 7); ctx.fillRect(x + 8, y - 6, 1, 5);
+  }
+  if (e.t === 'tasker') {   // memo with a red TASKER header and a due-yesterday stamp
+    ctx.fillStyle = C.paper; ctx.fillRect(x, y, 12, 14);
+    ctx.fillStyle = C.red; ctx.fillRect(x, y, 12, 3);
+    ctx.fillStyle = '#8a8f9e'; for (let k = 0; k < 4; k++) ctx.fillRect(x + 2, y + 5 + k * 2, 8 - (k % 2) * 3, 1);
+    ctx.fillStyle = C.red; ctx.fillRect(x + 7, y + 9, 4, 4); ctx.fillStyle = C.paper; ctx.fillRect(x + 8, y + 10, 2, 2);
+    ctx.fillStyle = '#c9d3e6'; const f = Math.floor(tm / 5) % 2; ctx.fillRect(x - 3, y + (f ? 3 : 6), 3, 2); ctx.fillRect(x + 12, y + (f ? 3 : 6), 3, 2);
+  } else if (e.t === 'xls') {   // spreadsheet with angry cells
+    ctx.fillStyle = '#1d7a3a'; ctx.fillRect(x, y, 14, 12);
+    ctx.fillStyle = '#e9f5ec'; ctx.fillRect(x + 1, y + 3, 12, 8);
+    ctx.fillStyle = '#7fb08c'; for (let k = 0; k < 3; k++) ctx.fillRect(x + 1 + k * 4 + 3, y + 3, 1, 8); ctx.fillRect(x + 1, y + 6, 12, 1); ctx.fillRect(x + 1, y + 9, 12, 1);
+    ctx.fillStyle = C.red; ctx.fillRect(x + 5, y + 7, 3, 2);
+    ctx.fillStyle = C.paper; ctx.fillRect(x + 2, y + 1, 1, 1); ctx.fillRect(x + 4, y + 1, 1, 1);
+  } else if (e.t === 'slide') {   // a single PowerPoint slide, flapping
+    ctx.fillStyle = '#e8752a'; ctx.fillRect(x, y, 14, 11);
+    ctx.fillStyle = C.paper; ctx.fillRect(x + 1, y + 1, 12, 9);
+    ctx.fillStyle = C.red; ctx.fillRect(x + 3, y + 5, 2, 4); ctx.fillStyle = C.navy; ctx.fillRect(x + 6, y + 3, 2, 6); ctx.fillStyle = '#3a9a46'; ctx.fillRect(x + 9, y + 6, 2, 3);
+    if (Math.floor(tm / 6) % 2) { ctx.fillStyle = '#e8752a'; ctx.fillRect(x - 2, y + 2, 2, 6); ctx.fillRect(x + 14, y + 2, 2, 6); }
+  } else if (e.t === 'sys') {   // broken system: sparking monitor with a sad blue screen
+    ctx.fillStyle = '#4a4e5a'; ctx.fillRect(x, y, 14, 11); ctx.fillRect(x + 5, y + 11, 4, 1);
+    ctx.fillStyle = Math.floor(tm / 20) % 4 === 0 ? '#111' : '#1d5fd1'; ctx.fillRect(x + 1, y + 1, 12, 8);
+    ctx.fillStyle = C.paper; ctx.fillRect(x + 3, y + 3, 1, 1); ctx.fillRect(x + 3, y + 6, 1, 1); ctx.fillRect(x + 6, y + 3, 1, 4); ctx.fillRect(x + 7, y + 2, 1, 1); ctx.fillRect(x + 7, y + 7, 1, 1);
+    if (tm % 14 < 3) { ctx.fillStyle = C.gold; ctx.fillRect(x + 12 + (tm % 3), y - 2, 2, 2); ctx.fillRect(x - 2, y + 4 + (tm % 4), 2, 1); }
+  } else if (e.t === 'ac') {   // broken window air conditioner
+    if (frameN % 40 < 28) txt('BROKEN A/C', x + 14, y - 12, frameN % 20 < 10 ? C.red : C.paper, 8, 'center');
+    ctx.fillStyle = '#6b6e70'; ctx.fillRect(x, y, 28, 20);
+    ctx.fillStyle = '#9aa0a8'; ctx.fillRect(x + 1, y + 1, 26, 18);
+    ctx.fillStyle = '#5d6170'; for (let k = 0; k < 6; k++) ctx.fillRect(x + 3 + k * 2, y + 4, 1, 12);   // vents
+    ctx.fillStyle = '#3a3c3e'; ctx.fillRect(x + 17, y + 4, 8, 8);
+    const a = Math.floor(tm / 25) % 2 ? 0 : 1;   // fan barely turning
+    ctx.fillStyle = '#c3c8cf'; ctx.fillRect(x + 20, y + 5 + a, 2, 6 - a * 2); ctx.fillRect(x + 18 + a, y + 7, 6 - a * 2, 2);
+    ctx.fillStyle = C.red; ctx.fillRect(x + 18, y + 14, 2, 2); ctx.fillStyle = tm % 30 < 15 ? C.gold : '#444'; ctx.fillRect(x + 22, y + 14, 2, 2);
+    ctx.fillStyle = '#2b2b2b'; ctx.fillRect(x + 3, y + 20, 4, 2); ctx.fillRect(x + 21, y + 20, 4, 2);
+    ctx.fillStyle = 'rgba(80,80,80,.55)'; const s = tm % 40; ctx.fillRect(x + 6 + s * 0.2, y - 4 - s * 0.3, 5, 3);   // smoke
+    const ed = e.dir > 0 ? 1 : 0;   // angry eyes
+    ctx.fillStyle = '#fff'; ctx.fillRect(x + 4, y + 1, 4, 3); ctx.fillRect(x + 10, y + 1, 4, 3);
+    ctx.fillStyle = '#000'; ctx.fillRect(x + 5 + ed, y + 2, 2, 2); ctx.fillRect(x + 11 + ed, y + 2, 2, 2);
+  }
+}
+function drawRemoteRoom() {   // inside TRICARE PRIME REMOTE
+  const t = 240 - remoteT;
+  ctx.fillStyle = '#4d4a42'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#5c5a52'; ctx.fillRect(0, 0, W, 118);
+  ctx.fillStyle = '#3a3832'; ctx.fillRect(0, 118, W, 62);
+  ctx.fillStyle = '#2f2d28'; for (let i = 0; i < W; i += 20) ctx.fillRect(i, 118, 1, 62);
+  ctx.fillStyle = frameN % 50 < 46 ? '#d8d3a0' : '#7a775a'; ctx.fillRect(110, 0, 100, 4);   // flickering light
+  ctx.fillStyle = '#2b2b2b'; ctx.fillRect(14, 30, 60, 40); ctx.fillStyle = '#8fb8d0'; ctx.fillRect(16, 32, 56, 36);   // window, busted blinds
+  ctx.fillStyle = '#9a968c'; for (let k = 0; k < 6; k++) ctx.fillRect(16, 34 + k * 6, k === 3 ? 30 : 56, 2);
+  ctx.fillStyle = '#e9e2c8'; ctx.fillRect(240, 18, 72, 40);
+  txt('TRICARE', 276, 22, C.navy, 8, 'center'); txt('PRIME', 276, 33, C.navy, 8, 'center'); txt('REMOTE!', 276, 44, C.red, 8, 'center');
+  ctx.fillStyle = '#7d8290'; ctx.fillRect(250, 84, 30, 34); ctx.fillStyle = '#5d6170'; ctx.fillRect(250, 100, 30, 1); ctx.fillRect(262, 90, 6, 1); ctx.fillRect(262, 108, 6, 1);   // cabinet
+  ctx.fillStyle = '#6b4f2a'; ctx.fillRect(150, 96, 70, 6); ctx.fillRect(154, 102, 4, 16); ctx.fillRect(212, 102, 4, 16);   // desk
+  ctx.fillStyle = '#4a4e5a'; ctx.fillRect(170, 82, 18, 14); ctx.fillStyle = '#1d5fd1'; ctx.fillRect(172, 84, 14, 10);   // computer (loading DEERS...)
+  spr(P_STAND, PAL, 70, 90, false, 2);                // you
+  spr(P_STAND, BLUE_PAL, 196, 90, true, 2);           // the AGR in blue
+  const k = Math.max(0, Math.min(1, (t - 120) / 30));   // handing over the machine gun
+  drawMG(180 + (88 - 180) * k, 104 - Math.sin(k * Math.PI) * 8, k < 1 ? -1 : 1);
+  // speech bubble with a typewriter reveal
+  const msg = "GOOD LUCK! HERE'S AN UPGRADED WEAPON AND UPDATED DEERS!", shown = msg.slice(0, Math.min(msg.length, Math.floor(t * 0.9)));
+  ctx.fillStyle = '#fff'; ctx.fillRect(110, 22, 124, 52); ctx.fillRect(112, 20, 120, 56);
+  ctx.fillStyle = '#000'; ctx.fillRect(110, 20, 2, 2); ctx.fillRect(232, 20, 2, 2);
+  ctx.fillStyle = '#fff'; for (let k = 0; k < 8; k++) ctx.fillRect(200 + k, 76 + k, 8 - k, 1);   // tail toward the speaker
+  ctx.font = '8px ' + FONT; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  const lines = []; let cur = '';
+  for (const w of shown.split(' ')) { const tt = cur ? cur + ' ' + w : w; if (ctx.measureText(tt).width > 110 && cur) { lines.push(cur); cur = w; } else cur = tt; }
+  if (cur) lines.push(cur);
+  ctx.fillStyle = C.navy; lines.forEach((l, i) => ctx.fillText(l, 117, 25 + i * 10));
+  if (t > 60) txtC('+1 HEART', 140, C.red);
+  if (t > 130) txtC('DEERS UPDATED   2X FIRE', 154, C.green);
+}
+function drawAgrMsg(y, t) {   // full-screen "you're AGR now" page
+  ctx.save(); ctx.translate(0, y);
+  const on = Math.floor(frameN / 10) % 2 === 0;
+  ctx.fillStyle = on ? C.navy : '#3a0a14'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = C.red; ctx.fillRect(8, 8, W - 16, 2); ctx.fillRect(8, H - 10, W - 16, 2);
+  bulbs(6, 6, W - 12, H - 12, 8, 2);
+  txtC('CONGRATS!', 16, on ? C.gold : C.paper, 16);
+  wrapC("YOU'RE IN ACTIVE GUARD/RESERVE STATUS!", 38, 280, C.paper);
+  txtC('TIME TO PCS!', 62, on ? C.paper : C.gold, 16);
+  wrapC('YOU ARE THE 10% OF THE RESERVE FORCES TRAINING, ADMINISTERING AND ORGANIZING WEEKEND WARRIORS TO EXCELLENCE!', 86, 284, on ? C.steel : C.paper);
+  if (t > 90) txtC(document.body.classList.contains('touch') ? 'TAP JUMP TO PCS' : 'PRESS JUMP TO PCS', 150, frameN % 30 < 20 ? C.green : C.paper);
+  ctx.restore();
 }
 function drawHeli(x, y) {
   x = Math.round(x); y = Math.round(y);
@@ -1718,6 +2202,11 @@ function drawPlayer(p) {
     ctx.fillStyle = '#fff'; ctx.fillRect(fx ? cx : cx + 19, y + 6, 1, 2);
     return;
   }
+  if (p.climb) {   // hand over hand up the ladder
+    const a = Math.floor(frameN / 8) % 2;
+    spr(a ? P_JUMP : P_STAND, PAL, p.x, p.y, a === 1);
+    return;
+  }
   const f = !p.onG ? P_JUMP : (Math.abs(p.vx) > 0.2 ? (Math.floor(p.run / 6) % 2 ? P_RUN1 : P_RUN2) : P_STAND);
   spr(f, PAL, p.x, p.y, p.face < 0);
   if (L && L.upgraded && frameN - L.handF >= 16) drawMG(p.face > 0 ? p.x + 3 : p.x - 7, p.y + 5, p.face);
@@ -1733,6 +2222,8 @@ function drawWorld() {
   if (L.mob && cx < 560) drawMobBuildings();
   const c0 = Math.max(0, Math.floor(cx / T)), c1 = Math.min(L.cols - 1, c0 + W / T + 1);
   if (L.commX && L.commX > cx - 120 && L.commX < cx + W + 20) drawCommissary(L.commX, L.commY * T);
+  if (L.ladX && L.ladX > cx - 160 && L.ladX < cx + W + 20) drawLadder(L.ladX, L.ladY * T);
+  if (L.agr && L.remX > cx - 120 && L.remX < cx + W + 20) drawRemote(L.remX, 8 * T);
   for (let c = c0; c <= c1; c++) for (let r = 0; r < ROWS; r++) { const v = L.g[r][c]; if (v) drawTile(v, c, r); }
   drawFlag(L.checkX, L.checkY * T, false);
   drawFlag(L.flagX, L.flagY * T, true);
@@ -1742,6 +2233,7 @@ function drawWorld() {
   for (const e of L.enemies) {
     if (e.x < cx - 60 || e.x > cx + W + 60) continue;
     if (e.kind === 'cobol') { drawCobol(e); continue; }
+    if (AGR_FOES.has(e.t)) { drawAgrFoe(e); continue; }
     if (e.big) { ctx.save(); ctx.translate(Math.round(e.x), Math.round(e.y)); ctx.scale(2, 2); drawFoe(e.t, 0, 0, e.dir, e.flash, e.tm); ctx.restore(); }
     else drawFoe(e.t, e.x, e.y, e.dir, e.flash, e.tm);
   }
@@ -1759,6 +2251,12 @@ function drawWorld() {
       ctx.fillStyle = '#d8d8d8'; ctx.fillRect(sx + 4, sy + 4, 1, 1); ctx.fillRect(sp ? sx + 2 : sx + 6, sy + 2, 1, 1); ctx.fillRect(sp ? sx + 6 : sx + 2, sy + 6, 1, 1);
       continue;
     }
+    if (s.hot) {   // blast of hot air from the broken A/C
+      const sx = Math.round(s.x), sy = Math.round(s.y), wv = (frameN >> 2) % 2;
+      ctx.fillStyle = 'rgba(232,117,42,.85)'; ctx.fillRect(sx, sy + wv, 8, 2); ctx.fillRect(sx + 1, sy + 3 - wv, 6, 2);
+      ctx.fillStyle = 'rgba(182,29,48,.8)'; ctx.fillRect(sx + 2, sy + 5, 4, 1);
+      continue;
+    }
     if (s.paper) {
       ctx.fillStyle = C.paper; ctx.fillRect(Math.round(s.x), Math.round(s.y), 7, 7);
       ctx.fillStyle = '#8a8f9e'; ctx.fillRect(Math.round(s.x) + 1, Math.round(s.y) + 2, 5, 1); ctx.fillRect(Math.round(s.x) + 1, Math.round(s.y) + 4, 4, 1);
@@ -1771,6 +2269,14 @@ function drawWorld() {
     const t = (frameN - L.handF) / 16;
     const gx0 = JX + 77;
     drawMG(gx0 + (pl.x + 3 - gx0) * t, (8 * T - 8) + (pl.y + 5 - (8 * T - 8)) * t - Math.sin(t * Math.PI) * 10, 1);
+  }
+  const wg = wingPos();
+  if (wg && !agrTr) {   // MILTECH wingman, a step behind you
+    const MT_PAL = Object.assign({}, PAL, { U: '#6f7647', u: '#4f5530', H: '#3f461a' });
+    const f = !wg.onG ? P_JUMP : (Math.abs(wg.vx) > 0.2 ? (Math.floor((pl.run + 3) / 6) % 2 ? P_RUN1 : P_RUN2) : P_STAND);
+    spr(f, MT_PAL, wg.x, wg.y, pl.face < 0);
+    if (L.upgraded) drawMG(pl.face > 0 ? wg.x + 3 : wg.x - 7, wg.y + 5, pl.face);
+    if (frameN - L.wingF < 240 && frameN % 30 < 22) txt('MILTECH', wg.x + 5, wg.y - 12, C.green, 8, 'center');
   }
   drawPlayer(pl);
   for (const b of bullets) {
@@ -1788,13 +2294,15 @@ function drawWorld() {
 
 function drawHUD() {
   ctx.fillStyle = 'rgba(0,13,38,.75)'; ctx.fillRect(0, 0, W, 13);
-  txt('YR ' + year, 4, 3, C.paper);
+  txt('YR ' + year, 4, 3, L.agr ? C.gold : C.paper);
   txt('PTS ' + pts + '/50', 52, 3, pts >= 50 ? C.green : C.paper);
   txt('$' + fmt(runPay), 136, 3, C.gold);
   for (let i = 0; i < Math.max(3, hearts); i++) spr(HEART, { R: i < hearts ? C.red : '#3a4a6a' }, 214 + i * 10, 3);
   const st = [];
   if (pl.shield > 0) st.push(['USERRA', C.steel]);
   if (pl.car > 0) st.push(['IDT ' + Math.ceil(pl.car / 60) + 'S', '#FFE600']);
+  if (L.agr) st.push(['AGR', C.steel]);
+  if (L.wing) st.push(['MILTECH', C.green]);
   if (L.upgraded) st.push(['2X FIRE', C.gold]);
   if (prog.lawShield) st.push(['ROA LAW', C.gold]);
   if (st.length) {
@@ -1826,8 +2334,33 @@ function draw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.imageSmoothingEnabled = false;
   const inWorld = L && ['play', 'pause', 'intro', 'win', 'bad', 'loss', 'ados', 'mobwin'].includes(state);
-  drawBG(inWorld ? cam : frameN * 0.5, inWorld && L ? L.theme : null);
-  if (inWorld) { drawWorld(); drawHUD(); }
+  // AGR ladder transition: the view slides like you're climbing up through the floors
+  let oy = 0, my = null;
+  if (inWorld && agrTr) {
+    const ease = s => { s = Math.max(0, Math.min(1, s)); return s * s * (3 - 2 * s); };
+    if (agrTr.ph === 's1') { const k = ease(agrTr.t / 45); oy = H * k; my = -H + H * k; }
+    else if (agrTr.ph === 'msg') { oy = H; my = 0; }
+    else if (agrTr.ph === 's2') { const k = ease(agrTr.t / 45); my = H * k; oy = -H + H * k; }
+  }
+  if (!inWorld) drawBG(frameN * 0.5, null);
+  else if (oy < H) {
+    ctx.save(); ctx.translate(0, Math.round(oy));
+    drawBG(cam, L.theme); drawWorld(); drawHUD();
+    ctx.restore();
+  }
+  if (my !== null) drawAgrMsg(Math.round(my), agrTr.ph === 'msg' ? agrTr.t : 0);
+  if (remoteT > 0 && (state === 'play' || state === 'pause')) drawRemoteRoom();
+  if (agrEndT > 0 && (state === 'play' || state === 'pause')) {   // end of the AGR tour
+    const on = Math.floor(agrEndT / 8) % 2 === 0;
+    ctx.fillStyle = on ? 'rgba(1,34,94,.96)' : 'rgba(47,91,183,.95)'; ctx.fillRect(0, 0, W, H);
+    bulbs(6, 6, W - 12, H - 12, 8, 2);
+    txtC('CONGRATS!', 30, on ? C.gold : C.paper, 16);
+    txtC('365 POINTS', 62, C.green, 16);
+    txtC('AND A VERY', 92, on ? C.paper : C.gold, 16);
+    txtC('GOOD YEAR!', 116, on ? C.gold : C.paper, 16);
+    txtC(year < 20 && year + 1 <= MAXY ? 'NEXT STOP: YEAR ' + (year + 1) : 'TOUR COMPLETE', 148, C.steel);
+    drawConf();
+  }
   if (mobT > 0 && (state === 'play' || state === 'pause')) {   // call-up alert
     const on = Math.floor(mobT / 8) % 2 === 0;
     ctx.fillStyle = on ? 'rgba(75,83,32,.96)' : 'rgba(1,34,94,.94)'; ctx.fillRect(0, 0, W, H);
@@ -2018,7 +2551,7 @@ function loop(t) {
 }
 requestAnimationFrame(loop);
 
-window.__goodYear = { startYear, step, draw, genLevel, go, get state() { return state; }, get pl() { return pl; }, get pts() { return pts; }, set pts(v) { pts = v; }, get L() { return L; }, get prog() { return prog; }, hold, touch, ev };
+window.__goodYear = { startYear, step, draw, genLevel, genAgr, enterAgr, startClimb, go, get agrTr() { return agrTr; }, get hearts() { return hearts; }, set hearts(v) { hearts = v; }, get cam() { return cam; }, get state() { return state; }, get pl() { return pl; }, get pts() { return pts; }, set pts(v) { pts = v; }, get L() { return L; }, get prog() { return prog; }, hold, touch, ev };
 })();
 </script>
 </body>
