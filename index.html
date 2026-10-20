@@ -665,7 +665,36 @@ function genLevel(y, mob) {
     Lv.items.push({ t: 'drill', x: s.x, y: s.y });
     if (++n >= 12) break;
   }
+  // family-program bonus targets: SPOUSEWORKS + TEEN ADVENTURE CAMP everywhere,
+  // EFMP + ADOPTION REIMBURSEMENT only while mobilized (active duty)
+  if (mob) placeBonus(Lv, [['spouse', 0.3], ['efmp', 0.45], ['adopt', 0.65], ['teen', 0.8]]);
+  else placeBonus(Lv, [['spouse', 0.18], ['teen', 0.74]]);
   return Lv;
+}
+
+/* Floating bonus targets for military family programs. Shoot them for points. */
+const BONUS = {
+  efmp:   { w: 30, h: 22, hp: 3, pts: 25, msg: 'EFMP! +25 PTS',              sub: 'SPECIAL NEEDS SUPPORT' },
+  adopt:  { w: 34, h: 22, hp: 3, pts: 25, msg: 'ADOPTION REIMBURSED! +25 PTS', sub: 'UP TO $2,000 PER CHILD' },
+  spouse: { w: 22, h: 16, hp: 2, pts: 10, msg: 'SPOUSEWORKS! +10 PTS',       sub: 'SPOUSE HIRED!', spin: true },
+  teen:   { w: 22, h: 16, hp: 2, pts: 10, msg: 'TEEN CAMP! +10 PTS',         sub: 'FREE SUMMER CAMP!', spin: true }
+};
+function placeBonus(Lv, list) {
+  const g = Lv.g, cols = Lv.cols;
+  list.forEach(([t, f]) => {
+    const B = BONUS[t];
+    for (let cc = Math.floor(cols * f); cc < cols - 14; cc++) {
+      let top = -1;
+      for (let i = 0; i < ROWS; i++) if (g[i][cc] === 1) { top = i; break; }
+      if (top < 5) continue;
+      let clear = true;   // nothing solid where the target floats
+      for (let k = 0; k < 3 && clear; k++) for (let r = top - 5; r < top; r++) if (g[r][cc + k] !== 0) clear = false;
+      if (!clear || Lv.targets.some(o => Math.abs(o.x - cc * T) < 48)) continue;
+      const y0 = top * T - 64 - (B.h - 16);
+      Lv.targets.push({ t, bonus: true, spin: !!B.spin, x: cc * T, y: y0, baseY: y0, w: B.w, h: B.h, hp: B.hp, flash: 0 });
+      break;
+    }
+  });
 }
 
 function startYear(y) {
@@ -785,6 +814,7 @@ function genAgr(y) {
       }
     }
   });
+  placeBonus(Lv, [['spouse', 0.3], ['efmp', 0.4], ['teen', 0.55], ['adopt', 0.7]]);
   return Lv;
 }
 function wingPos() {   // where the MILTECH wingman stands: your path a few frames back, just behind you
@@ -1254,7 +1284,7 @@ function stepPlay() {
   for (const tg of L.targets) {   // power-ups you shoot: IDT TRAVEL car and ADOS orders
     if (tg.got) continue;
     if (tg.flash > 0) tg.flash--;
-    if (tg.t === 'ados' || tg.t === 'tamp' || tg.t === 'premob' || tg.t === 'law' || tg.t === 'miltech') tg.y = tg.baseY + Math.sin(frameN * 0.05 + tg.x) * 3;
+    if (tg.t === 'ados' || tg.t === 'tamp' || tg.t === 'premob' || tg.t === 'law' || tg.t === 'miltech' || tg.bonus) tg.y = tg.baseY + Math.sin(frameN * 0.05 + tg.x) * 3;
     if (tg.t === 'cont') {
       if (tg.falling) { tg.y += 0.45; if (tg.y >= tg.baseY) tg.falling = false; }
       else tg.y = tg.baseY + Math.sin(frameN * 0.04) * 8;   // drifts on its parachute
@@ -1264,7 +1294,15 @@ function stepPlay() {
       b.dead = true; tg.hp--; tg.flash = 6;
       if (tg.hp > 0) { sfx.hit(); continue; }
       tg.got = true;
-      if (tg.t === 'miltech') {
+      if (tg.bonus) {   // military family program bonus
+        const B = BONUS[tg.t];
+        pts += B.pts;
+        for (let i = 0; i < 3; i++) burst(tg.x + tg.w / 2, tg.y + tg.h / 2, [C.gold, C.green, C.paper][i]);
+        pop(tg.x - 40, tg.y - 26, B.msg, C.green);
+        pop(tg.x - 30, tg.y - 14, B.sub, C.gold);
+        sfx.coin(); sfx.power();
+        if (pts >= 50 && !L.goodFlag) { L.goodFlag = true; pop(p.x - 60, p.y - 38, '50 PTS! RUN FOR THE FLAG', C.green); }
+      } else if (tg.t === 'miltech') {
         L.wing = true; L.wingF = frameN; p.hist = [];
         for (let i = 0; i < 3; i++) burst(tg.x + 10, tg.y + 8, i % 2 ? C.green : C.gold);
         pop(tg.x - 30, tg.y - 26, 'MILTECH ON DECK!', C.green);
@@ -1844,6 +1882,7 @@ function drawTarget(tg) {
     ctx.fillRect(x + 2, y + 6, 4, 1); ctx.fillRect(x + 3, y + 4, 1, 2); ctx.fillRect(x + 10, y + 6, 4, 1); ctx.fillRect(x + 12, y + 4, 1, 2);
     return;
   }
+  if (tg.bonus) { drawBonus(tg, x, y); return; }
   if (tg.t === 'miltech') {   // supply crate: shoot it to bring a MILTECH onto the team
     txt('MILTECH', x + 10, y - 13, frameN % 24 < 16 ? C.green : C.gold, 8, 'center');
     ctx.fillStyle = C.gold; ctx.fillRect(x - 1, y - 1, 22, 18);
@@ -1911,6 +1950,55 @@ function drawTarget(tg) {
   }
 }
 
+function drawBonus(tg, x, y) {
+  const on = frameN % 24 < 16, cx = x + tg.w / 2;
+  const hpBar = () => { for (let i = 0; i < BONUS[tg.t].hp; i++) { ctx.fillStyle = i < tg.hp ? C.gold : '#3a4a6a'; ctx.fillRect(cx - BONUS[tg.t].hp * 3 + i * 6 + 1, y + tg.h + 3, 4, 2); } };
+  if (tg.t === 'efmp') {   // big box: family with a heart
+    txt('EFMP!', cx, y - 13, on ? C.gold : C.paper, 8, 'center');
+    ctx.fillStyle = C.gold; ctx.fillRect(x - 1, y - 1, tg.w + 2, tg.h + 2);
+    ctx.fillStyle = '#5b2a86'; ctx.fillRect(x, y, tg.w, tg.h);
+    ctx.fillStyle = '#7d45b0'; ctx.fillRect(x, y, tg.w, 2);
+    ctx.fillStyle = C.paper;
+    ctx.fillRect(x + 5, y + 5, 4, 4); ctx.fillRect(x + 4, y + 10, 6, 8);      // adult
+    ctx.fillRect(x + 21, y + 5, 4, 4); ctx.fillRect(x + 20, y + 10, 6, 8);    // adult
+    ctx.fillRect(x + 13, y + 10, 4, 3); ctx.fillRect(x + 12, y + 14, 6, 5);   // child
+    ctx.fillStyle = C.red; ctx.fillRect(x + 12, y + 3, 2, 2); ctx.fillRect(x + 16, y + 3, 2, 2); ctx.fillRect(x + 12, y + 4, 6, 2); ctx.fillRect(x + 13, y + 6, 4, 1); ctx.fillRect(x + 14, y + 7, 2, 1);   // heart
+    hpBar(); return;
+  }
+  if (tg.t === 'adopt') {   // big box: house with a heart inside
+    txt('ADOPTION', cx, y - 24, on ? C.paper : C.gold, 8, 'center');
+    txt('REIMBURSEMENT!', cx, y - 13, on ? C.gold : C.paper, 8, 'center');
+    ctx.fillStyle = C.gold; ctx.fillRect(x - 1, y - 1, tg.w + 2, tg.h + 2);
+    ctx.fillStyle = '#1f6e2a'; ctx.fillRect(x, y, tg.w, tg.h);
+    ctx.fillStyle = C.green; ctx.fillRect(x, y, tg.w, 2);
+    ctx.fillStyle = C.paper; for (let r = 0; r < 6; r++) ctx.fillRect(cx - r - 2, y + 3 + r, r * 2 + 4, 1);   // roof
+    ctx.fillRect(cx - 7, y + 9, 14, 10);
+    ctx.fillStyle = C.red; ctx.fillRect(cx - 4, y + 11, 3, 2); ctx.fillRect(cx + 1, y + 11, 3, 2); ctx.fillRect(cx - 4, y + 12, 8, 2); ctx.fillRect(cx - 3, y + 14, 6, 1); ctx.fillRect(cx - 2, y + 15, 4, 1); ctx.fillRect(cx - 1, y + 16, 2, 1);
+    ctx.fillStyle = C.gold; ctx.fillRect(x + 3, y + 8, 2, 8); ctx.fillRect(x + 2, y + 9, 4, 1); ctx.fillRect(x + 2, y + 12, 4, 1); ctx.fillRect(x + 2, y + 15, 4, 1);   // $
+    hpBar(); return;
+  }
+  // rotating badges: SPOUSEWORKS and TEEN ADVENTURE CAMP!
+  if (tg.t === 'spouse') txt('SPOUSEWORKS', cx, y - 13, on ? C.gold : C.paper, 8, 'center');
+  else { txt('TEEN ADVENTURE', cx, y - 24, on ? C.paper : C.gold, 8, 'center'); txt('CAMP!', cx, y - 13, on ? C.gold : C.paper, 8, 'center'); }
+  const sx = Math.cos(frameN * 0.08 + tg.x * 0.01);
+  ctx.save(); ctx.translate(cx, y + tg.h / 2); ctx.scale(Math.max(0.12, Math.abs(sx)), 1);
+  const bx = -11, by = -8;
+  ctx.fillStyle = C.gold; ctx.fillRect(bx - 1, by - 1, 24, 18);
+  if (tg.t === 'spouse') {   // briefcase badge
+    ctx.fillStyle = '#1b3f9e'; ctx.fillRect(bx, by, 22, 16);
+    ctx.fillStyle = '#7a4f24'; ctx.fillRect(bx + 4, by + 5, 14, 9); ctx.fillStyle = '#5a3a18'; ctx.fillRect(bx + 8, by + 3, 6, 2); ctx.fillRect(bx + 4, by + 9, 14, 1);
+    ctx.fillStyle = C.gold; ctx.fillRect(bx + 10, by + 8, 2, 3);
+  } else {   // tent under a pine
+    ctx.fillStyle = '#2b6be0'; ctx.fillRect(bx, by, 22, 16);
+    ctx.fillStyle = '#1f6e2a'; ctx.fillRect(bx, by + 13, 22, 3);
+    ctx.fillStyle = '#e8752a'; for (let r = 0; r < 8; r++) ctx.fillRect(bx + 11 - r, by + 5 + r, r * 2 + 1, 1);
+    ctx.fillStyle = '#5a2a10'; ctx.fillRect(bx + 10, by + 9, 2, 4);
+    ctx.fillStyle = '#0f4a30'; for (let r = 0; r < 7; r++) ctx.fillRect(bx + 18 - Math.floor(r / 2), by + 2 + r, Math.floor(r / 2) * 2 + 1, 1);
+    ctx.fillStyle = C.gold; ctx.fillRect(bx + 3, by + 2, 2, 2);   // sun
+  }
+  ctx.restore();
+  hpBar();
+}
 function drawCobol(e) {
   const x = Math.round(e.x), y = Math.round(e.y), tm = e.tm;
   if (e.flash > 0 && e.flash % 2) { ctx.fillStyle = '#fff'; ctx.fillRect(x, y, 48, 56); return; }
